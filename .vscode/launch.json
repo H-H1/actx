@@ -1,0 +1,65 @@
+{
+    // VS Code 调试配置：actx CLI（入口 cmd/actx/main.go）
+    // 使用方式：按 F5 或在"运行和调试"面板选择对应配置
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // 交互式 TUI 模式（默认行为，无参数）
+            "name": "actx: TUI 交互模式",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/actx",
+            "cwd": "${workspaceFolder}",
+            // TUI 需要真实终端，调试控制台渲染会异常
+            "console": "integratedTerminal"
+        },
+        {
+            // 非交互 exec 模式：单轮执行后退出，最适合断点调试
+            "name": "actx: exec 单轮执行",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/actx",
+            "args": ["exec", "你好，介绍一下你自己"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            // App Server 模式：JSON-RPC 服务，供 IDE/客户端连接
+            "name": "actx: app-server JSON-RPC 服务",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/actx",
+            "args": ["app-server"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            // 诊断模式：检查环境、配置、密钥是否就绪
+            "name": "actx: doctor 环境诊断",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/actx",
+            "args": ["doctor"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            // 附加到已运行的进程（先用 actx app-server 启动）
+            "name": "actx: 附加到运行中的进程",
+            "type": "go",
+            "request": "attach",
+            "mode": "local",
+            "processId": 0
+        }
+    ],
+    "compounds": [
+        {
+            "name": "actx: doctor + exec 组合",
+            "configurations": ["actx: doctor 环境诊断", "actx: exec 单轮执行"]
+        }
+    ]
+}

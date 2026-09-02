@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Java vs Go 终极对决</title>
+<style>
+  :root {
+    --java-color: #e76f00;
+    --go-color: #00add8;
+    --dark-bg: #0f172a;
+    --card-bg: #1e293b;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--dark-bg);
+    color: var(--text);
+    overflow-x: hidden;
+  }
+
+  /* ===== 背景动画 ===== */
+  .bg-animation {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(135deg, #0f172a 0%, #1a2238 50%, #0f172a 100%);
+    background-size: 400% 400%;
+    animation: bgShift 20s ease infinite;
+  }
+
+  @keyframes bgShift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+
+  /* 浮动粒子 */
+  .particle {
+    position: fixed;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.25;
+    animation: floatUp linear infinite;
+  }
+
+  @keyframes floatUp {
+    0% { transform: translateY(110vh) scale(1); opacity: 0; }
+    10% { opacity: 0.25; }
+    90% { opacity: 0.15; }
+    100% { transform: translateY(-10vh) scale(1.4); opacity: 0; }
+  }
+
+  /* ===== 容器 ===== */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+    position: relative;
+    z-index: 2;
+  }
+
+  /* ===== Hero 区域 ===== */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 40px 20px;
+  }
+
+  .hero-badge {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    font-size: clamp(3rem, 10vw, 7rem);
+    font-weight: 900;
+    letter-spacing: 4px;
+    user-select: none;
+  }
+
+  .java-title {
+    color: var(--java-color);
+    text-shadow: 0 0 40px rgba(231, 111, 0, 0.7);
+    animation: glowPulse 3s ease-in-out infinite, floatY 4s ease-in-out infinite;
+    display: inline-block;
+  }
+
+  .go-title {
+    color: var(--go-color);
+    text-shadow: 0 0 40px rgba(0, 173, 216, 0.7);
+    animation: glowPulse 3s ease-in-out 1.5s infinite, floatY 4s ease-in-out 2s infinite;
+    display: inline-block;
+  }
+
+  .vs-text {
+    font-size: 0.5em;
+    color: var(--muted);
+    animation: vsSpin 6s linear infinite;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+    width: 1.2em;
+    height: 1.2em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.55em;
+    box-shadow: 0 0 30px rgba(0,0,0,0.5);
+  }
+
+  @keyframes glowPulse {
+    0%, 100% { text-shadow: 0 0 20px currentColor; }
+    50% { text-shadow: 0 0 60px currentColor; }
+  }
+
+  @keyframes floatY {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-18px); }
+  }
+
+  @keyframes vsSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .hero h1 {
+    margin-top: 30px;
+    font-size: clamp(1.4rem, 3.5vw, 2.5rem);
+    background: linear-gradient(90deg, var(--java-color), #fbbf24, var(--go-color), #7dd3fc);
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: textGradient 6s ease infinite;
+  }
+
+  @keyframes textGradient {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  .hero p {
+    margin-top: 18px;
+    color: var(--muted);
+    font-size: 1.1rem;
+    max-width: 600px;
+    line-height: 1.8;
+  }
+
+  .scroll-hint {
+    margin-top: 50px;
+    animation: bounceDown 2s ease infinite;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  @keyframes bounceDown {
+    0%, 100% { transform: translateY(0); opacity: 1; }
+    50% { transform: translateY(16px); opacity: 0.4; }
+  }
+
+  /* ===== 通用 Section ===== */
+  section { padding: 80px 0; }
+
+  .section-title {
+    text-align: center;
+    font-size: clamp(1.5rem, 4vw, 2.2rem);
+    margin-bottom: 50px;
+    font-weight: 800;
+  }
+
+  .section-title .java-mark { color: var(--java-color); }
+  .section-title .go-mark { color: var(--go-color); }
+  .section-title .vs-mark {
+    background: linear-gradient(90deg, var(--java-color), var(--go-color));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* 滚动出现动画 */
+  .reveal {
+    opacity: 0;
+    transform: translateY(60px);
+    transition: opacity 0.9s ease, transform 0.9s ease;
+  }
+
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ===== 对比双栏 ===== */
+  .compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+  }
+
+  .lang-card {
+    border-radius: 20px;
+    padding: 34px 28px;
+    backdrop-filter: blur(10px);
+    transition: transform 0.4s ease, box-shadow 0.4s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .lang-card:hover {
+    transform: translateY(-10px) scale(1.02);
+  }
+
+  .lang-card.java-card {
+    background: rgba(231, 111, 0, 0.08);
+    border: 1px solid rgba(231, 111, 0, 0.4);
+  }
+  .lang-card.java-card:hover { box-shadow: 0 20px 60px rgba(231, 111, 0, 0.3); }
+
+  .lang-card.go-card {
+    background: rgba(0, 173, 216, 0.08);
+    border: 1px solid rgba(0, 173, 216, 0.4);
+  }
+  .lang-card.go-card:hover { box-shadow: 0 20px 60px rgba(0, 173, 216, 0.3); }
+
+  .lang-card::before {
+    content: "";
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: conic-gradient(from 0deg, transparent 0deg, rgba(255,255,255,0.05) 10deg, transparent 30deg);
+    animation: rotateSheen 8s linear infinite;
+    pointer-events: none;
+  }
+
+  @keyframes rotateSheen {
+    to { transform: rotate(360deg); }
+  }
+
+  .lang-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .lang-logo {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    font-weight: 900;
+    color: white;
+    animation: logoPulse 3s ease-in-out infinite;
+  }
+
+  .java-logo { background: linear-gradient(135deg, #f89820, #e76f00); box-shadow: 0 8px 24px rgba(231,111,0,0.5); }
+  .go-logo { background: linear-gradient(135deg, #00c8ff, #00add8); box-shadow: 0 8px 24px rgba(0,173,216,0.5); }
+
+  @keyframes logoPulse {
+    0%, 100% { transform: scale(1) rotate(0deg); }
+    50% { transform: scale(1.12) rotate(5deg); }
+  }
+
+  .lang-name { font-size: 1.8rem; font-weight: 800; }
+  .lang-sub { color: var(--muted); font-size: 0.9rem; }
+
+  .feature-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .feature-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    font-size: 1rem;
+    line-height: 1.6;
+    opacity: 0;
+    transform: translateX(-20px);
+    animation: slideInItem 0.6s ease forwards;
+  }
+
+  .java-card .feature-list li:nth-child(1) { animation-delay: 0.1s; }
+  .java-card .feature-list li:nth-child(2) { animation-delay: 0.2s; }
+  .java-card .feature-list li:nth-child(3) { animation-delay: 0.3s; }
+  .java-card .feature-list li:nth-child(4) { animation-delay: 0.4s; }
+  .java-card .feature-list li:nth-child(5) { animation-delay: 0.5s; }
+  .java-card .feature-list li:nth-child(6) { animation-delay: 0.6s; }
+
+  .go-card .feature-list li:nth-child(1) { animation-delay: 0.15s; }
+  .go-card .feature-list li:nth-child(2) { animation-delay: 0.25s; }
+  .go-card .feature-list li:nth-child(3) { animation-delay: 0.35s; }
+  .go-card .feature-list li:nth-child(4) { animation-delay: 0.45s; }
+  .go-card .feature-list li:nth-child(5) { animation-delay: 0.55s; }
+  .go-card .feature-list li:nth-child(6) { animation-delay: 0.65s; }
+
+  @keyframes slideInItem {
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .check-icon {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 900;
+    margin-top: 2px;
+  }
+
+  .java-card .check-icon { background: rgba(231,111,0,0.2); color: #f89820; }
+  .go-card .check-icon { background: rgba(0,173,216,0.2); color: #38bdf8; }
+
+  /* ===== 数据对比 ===== */
+  .stats-grid {
+    display: grid;
+    gap: 30px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .stat-row {
+    background: rgba(255,255,255,0.04);
+    border-radius: 16px;
+    padding: 20px 24px;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .stat-row .stat-title {
+    font-weight: 700;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .stat-bar-wrap { display: flex; align-items: center; gap: 12px; }
+  .stat-label { font-size: 0.85rem; color: var(--muted); width: 50px; flex-shrink: 0; font-weight: 800; }
+  .stat-bar-track {
+    flex: 1;
+    height: 22px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 11px;
+    overflow: hidden;
+    position: relative;
+  }
+  .stat-bar-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 11px;
+    position: relative;
+    transition: width 1.6s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .java-fill {
+    background: linear-gradient(90deg, #f89820, #e76f00);
+    box-shadow: 0 0 20px rgba(231,111,0,0.6);
+    animation: barShimmer 2s linear infinite;
+  }
+  .go-fill {
+    background: linear-gradient(90deg, #00c8ff, #00add8);
+    box-shadow: 0 0 20px rgba(0,173,216,0.6);
+    animation: barShimmer 2s linear infinite;
+  }
+
+  @keyframes barShimmer {
+    0% { filter: brightness(1); }
+    50% { filter: brightness(1.4); }
+    100% { filter: brightness(1); }
+  }
+
+  .stat-value {
+    font-weight: 800;
+    min-width: 56px;
+    text-align: right;
+  }
+  .stat-value.java-value { color: var(--java-color); }
+  .stat-value.go-value { color: var(--go-color); }
+
+  /* ===== 代码对比 ===== */
+  .code-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+    margin-top: 20px;
+  }
+
+  .code-box {
+    background: #0a0e1a;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.1);
+    transition: transform 0.4s ease, box-shadow 0.4s ease;
+  }
+  .code-box:hover {
+    transform: translateY(-8px) rotateX(4deg);
+    box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+  }
+
+  .code-header {
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot-red { background: #ff5f57; }
+  .dot-yellow { background: #febc2e; }
+  .dot-green { background: #28c840; }
+
+  .code-filename {
+    margin-left: 10px;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  pre {
+    padding: 22px;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 0.85rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    color: #d4e0f0;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  /* 简单代码高亮 */
+  .kw { color: #c678dd; }
+  .type { color: #e5c07b; }
+  .str { color: #98c379; }
+  .fn { color: #61afef; }
+  .com { color: #5c6370; font-style: italic; }
+  .num { color: #d19a66; }
+
+  /* 打字机光标效果 */
+  .code-box pre { position: relative; }
+
+  /* ===== 特色卡片 ===== */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 24px;
+  }
+
+  .feature-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 28px 22px;
+    transition: transform 0.4s ease, border-color 0.4s ease, background 0.4s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .feature-card:hover {
+    transform: translateY(-8px) rotate(-1deg);
+    border-color: rgba(255,255,255,0.3);
+    background: rgba(255,255,255,0.08);
+  }
+
+  .feature-card::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    width: 0;
+    background: linear-gradient(90deg, var(--java-color), var(--go-color));
+    transition: width 0.5s ease;
+  }
+  .feature-card:hover::after { width: 100%; }
+
+  .feature-icon {
+    font-size: 2.2rem;
+    margin-bottom: 16px;
+    display: inline-block;
+    animation: iconWiggle 4s ease-in-out infinite;
+  }
+
+  @keyframes iconWiggle {
+    0%, 100% { transform: rotate(0deg) scale(1); }
+    25% { transform: rotate(-8deg) scale(1.1); }
+    75% { transform: rotate(8deg) scale(1.1); }
+  }
+
+  .feature-card h3 { margin-bottom: 10px; font-size: 1.15rem; }
+  .feature-card p { color: var(--muted); font-size: 0.92rem; line-height: 1.7; }
+  .feature-card .feature-tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 800;
+    padding: 3px 10px;
+    border-radius: 20px;
+    margin-bottom: 14px;
+  }
+  .tag-java { background: rgba(231,111,0,0.15); color: #f89820; }
+  .tag-go { background: rgba(0,173,216,0.15); color: #38bdf8; }
+  .tag-both { background: rgba(255,255,255,0.1); color: var(--muted); }
+
+  /* ===== 总结横幅 ===== */
+  .summary-box {
+    background: linear-gradient(135deg, rgba(231,111,0,0.12), rgba(0,173,216,0.12));
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 20px;
+    padding: 40px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .summary-box::before {
+    content: "";
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(255,255,255,0.05) 0%, transparent 40%);
+    animation: sheenMove 6s linear infinite;
+  }
+
+  @keyframes sheenMove {
+    0% { transform: translate(-30%, -30%); }
+    100% { transform: translate(30%, 30%); }
+  }
+
+  .summary-box h3 {
+    font-size: 1.8rem;
+    margin-bottom: 16px;
+    position: relative;
+  }
+  .summary-box p {
+    color: var(--muted);
+    max-width: 700px;
+    margin: 0 auto;
+    line-height: 1.9;
+    font-size: 1.05rem;
+    position: relative;
+  }
+
+  .summary-box .emphasis {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  /* ===== 按钮 ===== */
+  .btn-group {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-top: 40px;
+  }
+
+  .btn {
+    padding: 14px 36px;
+    border-radius: 50px;
+    border: none;
+    font-size: 1.05rem;
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    letter-spacing: 1px;
+  }
+
+  .btn-java {
+    background: linear-gradient(135deg, #f89820, #e76f00);
+    color: white;
+    box-shadow: 0 8px 30px rgba(231,111,0,0.4);
+  }
+
+  .btn-go {
+    background: linear-gradient(135deg, #00c8ff, #00add8);
+    color: white;
+    box-shadow: 0 8px 30px rgba(0,173,216,0.4);
+  }
+
+  .btn:hover {
+    transform: translateY(-4px) scale(1.05);
+  }
+  .btn-java:hover { box-shadow: 0 16px 40px rgba(231,111,0,0.6); }
+  .btn-go:hover { box-shadow: 0 16px 40px rgba(0,173,216,0.6); }
+
+  .btn::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    animation: btnShine 3s ease infinite;
+  }
+
+  @keyframes btnShine {
+    0%, 60% { left: -100%; }
+    100% { left: 100%; }
+  }
+
+  /* ===== 页脚 ===== */
+  footer {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--muted);
+    font-size: 0.9rem;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+
+  /* ===== 响应式 ===== */
+  @media (max-width: 768px) {
+    .compare-grid, .code-compare { grid-template-columns: 1fr; }
+    .hero-badge { gap: 16px; }
+    section { padding: 50px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-animation"></div>
+
+<!-- ================= HERO ================= -->
+<header class="hero">
+  <div class="hero-badge">
+    <span class="java-title">Java</span>
+    <span class="vs-text">VS</span>
+    <span class="go-title">Go</span>
+  </div>
+  <h1>两大编程语言的巅峰对决</h1>
+  <p>一个统治企业级后端二十余年，一个以极简与并发闻名于世。<br/>滚动页面，看看它们各自的风采！</p>
+  <div class="scroll-hint">▼ 向下滑动 ▼</div>
+</header>
+
+<!-- ================= 特性对比 ================= -->
+<section>
+  <div class="container">
+    <h2 class="section-title reveal">语言<span class="vs-mark">特性</span>对比</h2>
+    <div class="compare-grid">
+      <div class="lang-card java-card reveal">
+        <div class="lang-header">
+          <div class="lang-logo java-logo">☕</div>
+          <div>
+            <div class="lang-name">Java</div>
+            <div class="lang-sub">Sun/Oracle · 1995 · 静态强类型</div>
+          </div>
+        </div>
+        <ul class="feature-list">
+          <li><span class="check-icon">✓</span>跨平台 JVM，一次编写到处运行</li>
+          <li><span class="check-icon">✓</span>面向对象，生态极其庞大（Spring 等）</li>
+          <li><span class="check-icon">✓</span>强类型 + 成熟 GC，适合大型企业应用</li>
+          <li><span class="check-icon">✓</span>海量第三方库与社区支持</li>
+          <li><span class="check-icon">✓</span>内存占用较高，启动速度较慢</li>
+          <li><span class="check-icon">✓</span>语法冗长，样板代码（boilerplate）多</li>
+        </ul>
+      </div>
+      <div class="lang-card go-card reveal">
+        <div class="lang-header">
+          <div class="lang-logo go-logo">🐹</div>
+          <div>
+            <div class="lang-name">Go</div>
+            <div class="lang-sub">Google · 2009 · 静态强类型</div>
+          </div>
+        </div>
+        <ul class="feature-list">
+          <li><span class="check-icon">✓</span>编译为原生二进制，秒级启动</li>
+          <li><span class="check-icon">✓</span>goroutine 轻量并发，云原生标配</li>
+          <li><span class="check-icon">✓</span>语法极简，上手快、可读性高</li>
+          <li><span class="check-icon">✓</span>内置 GC 与并发原语（channel）</li>
+          <li><span class="check-icon">✓</span>内存占用极低，适合高并发服务</li>
+          <li><span class="check-icon">✓</span>泛型较新，生态仍在快速成长</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 数据对比 ================= -->
+<section>
+  <div class="container">
+    <h2 class="section-title reveal">关键<span class="vs-mark">数据</span>对比</h2>
+    <div class="stats-grid">
+      <div class="stat-row reveal">
+        <div class="stat-title">
+          <span>🕐 启动速度</span>
+          <span style="color:var(--muted);font-size:0.8rem;font-weight:400;">数值越大表示越快</span>
+        </div>
+        <div class="stat-bar-wrap">
+          <span class="stat-label java-value">JAVA</span>
+          <div class="stat-bar-track"><div class="stat-bar-fill java-fill" data-width="45%"></div></div>
+          <span class="stat-value java-value" data-value="慢" data-is-text="true">慢</span>
+        </div>
+        <div class="stat-bar-wrap" style="margin-top:10px;">
+          <span class="stat-label go-value">GO</span>
+          <div class="stat-bar-track"><div class="stat-bar-fill go-fill" data-width="95%"></div></div>
+          <span class="stat-value go-value" data-value="极快" data-is-text="true">极快</span>
+        </div>
+      </div>
+
+      <div class="stat-row reveal">
+        <div class="stat-title">
+          <span>📦 内存占用</span>
+          <span style="color:var(--muted);font-size:0.8rem;font-weight:400;">数值越大表示占用越多</span>
+        </div>
+        <div class="stat-bar-wrap">
+          <span class="stat-label java-value">JAVA</span>
+          <div class="stat-bar-track"><div class="stat-bar-fill java-fill" data-width="88%"></div></div>
+          <span class="stat-value java-value" data-value="高" data-is-text="true">高</span>
+        </div>
+        <div class="stat-bar-wrap" style="margin-top:10px;">
+          <span class="stat-label go-value">GO</span>
+          <div class="stat-bar-track"><div class="stat-bar-fill go-fill" data-width="35%"></div></div>
+          <span class="stat-value go-value" data-value="低" data-is-text="true">低</span>
+        </div>
+      </div>
+
+      <div class="stat-row reveal">
+        <div class="stat-title">
+          <span>👨‍💻 开发者数量（2023 年，约）</span>
+        </div>
+        <div class="stat-bar-wrap">
+          <span class="stat-label java-value">JAVA</span>
+          <div class="stat-bar-track"><div class="stat-bar-fill java-fill" data-width="88%"></div></div>
+          <span class="stat-value java-value" data-value="890万">890万</span>
+        </div>
+        <div class="stat-bar-wrap" style="margin-top:10px;">
+          <span class="stat-label go-value">GO</span>
+          <div class="stat-bar-track"><div class="stat-bar-fill go-fill" data-width="48%"></div></div>
+          <span class="stat-value go-value" data-value="480万">480万</span>
+        </div>
+      </div>
+
+      <div class="stat-row reveal">
+        <div class="stat-title">
+          <span>🏆 各领域主导度</span>
+        </div>
+        <div class="stat-bar-wrap">
+          <span class="stat-label java-value">JAVA</span>
+          <div class="stat-bar-track"><div class="stat-bar-fill java-fill" data-width="95%"></div></div>
+          <span class="stat-value java-value" data-value="企业后端/安卓">企业后端/安卓</span>
+        </div>
+        <div class="stat-bar-wrap" style="margin-top:10px;">
+          <span class="stat-label go-value">GO</span>
+          <div class="stat-bar-track"><div class="stat-bar-fill go-fill" data-width="92%"></div></div>
+          <span class="stat-value go-value" data-value="云原生/微服务">云原生/微服务</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 代码对比 ================= -->
+<section>
+  <div class="container">
+    <h2 class="section-title reveal">Hello World 代码<span class="vs-mark">对比</span></h2>
+    <div class="code-compare">
+      <div class="code-box reveal">
+        <div class="code-header">
+          <span class="dot dot-red"></span>
+          <span class="dot dot-yellow"></span>
+          <span class="dot dot-green"></span>
+          <span class="code-filename">Hello.java</span>
+        </div>
+        <pre><span class="com">// 经典 Java Hello World</span>
+<span class="kw">public class</span> <span class="type">HelloWorld</span> {
+    <span class="kw">public static void</span> <span class="fn">main</span>(<span class="type">String</span>[] <span class="fn">args</span>) {
+        <span class="type">System</span>.<span class="fn">out</span>.<span class="fn">println</span>(<span class="str">"Hello, World!"</span>);
+    }
+}</pre>
+      </div>
+      <div class="code-box reveal">
+        <div class="code-header">
+          <span class="dot dot-red"></span>
+          <span class="dot dot-yellow"></span>
+          <span class="dot dot-green"></span>
+          <span class="code-filename">main.go</span>
+        </div>
+        <pre><span class="com">// Go 极简 Hello World</span>
+<span class="kw">package</span> main
+
+<span class="kw">import</span> <span class="str">"fmt"</span>
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    <span class="fn">fmt</span>.<span class="fn">Println</span>(<span class="str">"Hello, World!"</span>)
+}</pre>
+      </div>
+    </div>
+
+    <div class="code-compare" style="margin-top:30px;">
+      <div class="code-box reveal">
+        <div class="code-header">
+          <span class="dot dot-red"></span>
+          <span class="dot dot-yellow"></span>
+          <span class="dot dot-green"></span>
+          <span class="code-filename">Server.java（多线程）</span>
+        </div>
+        <pre><span class="com">// Java 多线程服务器示例</span>
+<span class="kw">import</span> java.util.concurrent.*;
+
+<span class="kw">class</span> <span class="type">Server</span> {
+    <span class="type">ExecutorService</span> pool =
+        <span class="type">Executors</span>.<span class="fn">newFixedThreadPool</span>(<span class="num">100</span>);
+
+    <span class="kw">void</span> <span class="fn">handle</span>(<span class="type">Runnable</span> task) {
+        pool.<span class="fn">submit</span>(task);
+    }
+}</pre>
+      </div>
+      <div class="code-box reveal">
+        <div class="code-header">
+          <span class="dot dot-red"></span>
+          <span class="dot dot-yellow"></span>
+          <span class="dot dot-green"></span>
+          <span class="code-filename">server.go（goroutine）</span>
+        </div>
+        <pre><span class="com">// Go 并发服务器示例</span>
+<span class="kw">package</span> main
+
+<span class="kw">func</span> <span class="fn">handle</span>(<span class="fn">task</span> <span class="kw">func</span>()) {
+    <span class="kw">go</span> task()  <span class="com">// 一行开启并发</span>
+}
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    <span class="fn">handle</span>(<span class="kw">func</span>() {
+        <span class="fn">println</span>(<span class="str">"goroutine is awesome!"</span>)
+    })
+    <span class="fn">select</span> {}
+}</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 特色卡片 ================= -->
+<section>
+  <div class="container">
+    <h2 class="section-title reveal">各自<span class="vs-mark">优势</span>一览</h2>
+    <div class="feature-grid">
+      <div class="feature-card reveal">
+        <span class="feature-tag tag-java">JAVA</span>
+        <div class="feature-icon">🏦</div>
+        <h3>企业级稳定</h3>
+        <p>银行、电商、大数据（Hadoop/Spark）核心系统长期选用，稳定性久经考验。</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-tag tag-go">GO</span>
+        <div class="feature-icon">☁️</div>
+        <h3>云原生之王</h3>
+        <p>Docker、Kubernetes、etcd 均为 Go 编写，是云原生时代的事实标准。</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-tag tag-java">JAVA</span>
+        <div class="feature-icon">🧩</div>
+        <h3>生态天花板</h3>
+        <p>Spring Boot 全家桶、MyBatis、Netty… 二十余年沉淀，方案应有尽有。</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-tag tag-go">GO</span>
+        <div class="feature-icon">🚀</div>
+        <h3>极简与高效</h3>
+        <p>单一二进制部署，零依赖，容器镜像可小至几 MB，部署体验一流。</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-tag tag-java">JAVA</span>
+        <div class="feature-icon">📚</div>
+        <h3>学习资源丰富</h3>
+        <p>教程、框架、社区、工作机会都极为庞大，入门资料多到看不完。</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-tag tag-go">GO</span>
+        <div class="feature-icon">⚡</div>
+        <h3>并发模型先进</h3>
+        <p>goroutine 内存占用仅 KB 级，轻松支撑百万级并发，性能强劲。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 总结 ================= -->
+<section>
+  <div class="container">
+    <div class="summary-box reveal">
+      <h3>🤝 没有绝对赢家，只有合适场景</h3>
+      <p>
+        <span class="emphasis">选 Java</span> —— 如果你在做大型企业系统、安卓开发、大数据处理，需要成熟生态与海量人才储备。<br/><br/>
+        <span class="emphasis">选 Go</span> —— 如果你在做云原生基础设施、高并发 API、CLI 工具，追求极简、高效与快速部署。<br/><br/>
+        最好的策略是：<span class="emphasis">两者都学！</span> 它们并非敌人，而是彼此成就的好搭档。
+      </p>
+      <div class="btn-group">
+        <button class="btn btn-java" onclick="alert('☕ 你选择了 Java！稳如老狗，企业最爱！')">☕ 我选 Java</button>
+        <button class="btn btn-go" onclick="alert('🐹 你选择了 Go！极简高效，云原生之魂！')">🐹 我选 Go</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Java vs Go 动效对比页 · 纯 HTML / CSS / JS 实现 · 无任何框架依赖
+</footer>
+
+<script>
+  /* ===== 生成浮动粒子 ===== */
+  function createParticles() {
+    const colors = ['rgba(231,111,0,', 'rgba(0,173,216,'];
+    for (let i = 0; i < 30; i++) {
+      const p = document.createElement('div');
+      p.className = 'particle';
+      const size = Math.random() * 8 + 3;
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      p.style.cssText = `
+        width: ${size}px;
+        height: ${size}px;
+        left: ${Math.random() * 100}%;
+        bottom: -20px;
+        background: ${color}${Math.random() * 0.4 + 0.1});
+        box-shadow: 0 0 ${size * 2}px ${color}0.6);
+        animation-duration: ${Math.random() * 15 + 12}s;
+        animation-delay: ${Math.random() * 15}s;
+      `;
+      document.body.appendChild(p);
+    }
+  }
+  createParticles();
+
+  /* ===== 滚动出现动画 ===== */
+  const revealEls = document.querySelectorAll('.reveal');
+
+  function checkReveal() {
+    const triggerBottom = window.innerHeight * 0.88;
+    revealEls.forEach(el => {
+      const top = el.getBoundingClientRect().top;
+      if (top < triggerBottom) {
+        el.classList.add('visible');
+      }
+    });
+  }
+
+  /* ===== 进度条动画 + 数值动画 ===== */
+  let statsAnimated = false;
+
+  function animateStats() {
+    if (statsAnimated) return;
+    statsAnimated = true;
+
+    document.querySelectorAll('.stat-bar-fill').forEach(fill => {
+      const width = fill.dataset.width;
+      setTimeout(() => { fill.style.width = width; }, 200);
+    });
+
+    // 数值滚动动画
+    document.querySelectorAll('.stat-value').forEach(val => {
+      if (val.dataset.isText === 'true') {
+        // 文本类型：逐个字符打字机效果
+        const target = val.dataset.value;
+        const original = val.textContent;
+        val.textContent = '';
+        let idx = 0;
+        const typeInterval = setInterval(() => {
+          val.textContent += target[idx];
+          idx++;
+          if (idx >= target.length) clearInterval(typeInterval);
+        }, 90);
+      } else {
+        // 数字类型：从 0 滚动到目标
+        const target = parseInt(val.dataset.value.replace(/[^\d]/g, ''), 10) || 0;
+        const suffix = val.dataset.value.replace(/[\d]/g, '').trim();
+        let count = 0;
+        const duration = 1500;
+        const stepTime = 30;
+        const steps = duration / stepTime;
+        const increment = target / steps;
+        const counter = setInterval(() => {
+          count += increment;
+          if (count >= target) {
+            val.textContent = target.toLocaleString() + suffix;
+            clearInterval(counter);
+          } else {
+            val.textContent = Math.floor(count).toLocaleString() + suffix;
+          }
+        }, stepTime);
+      }
+    });
+  }
+
+  /* ===== 滚动监听 ===== */
+  let scrollTicking = false;
+  window.addEventListener('scroll', () => {
+    if (!scrollTicking) {
+      window.requestAnimationFrame(() => {
+        checkReveal();
+        scrollTicking = false;
+      });
+      scrollTicking = true;
+    }
+  });
+
+  // 初始化
+  checkReveal();
+
+  /* ===== 统计区滚动触发 ===== */
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        animateStats();
+      }
+    });
+  }, { threshold: 0.3 });
+
+  const statsSection = document.querySelector('.stats-grid');
+  if (statsSection) observer.observe(statsSection);
+
+  /* ===== 代码区打字机效果（进入视野时） ===== */
+  const codeBoxes = document.querySelectorAll('.code-box pre');
+  const codeObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('typing-active');
+        codeObserver.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.2 });
+
+  codeBoxes.forEach(pre => codeObserver.observe(pre));
+</script>
+</body>
+</html>
