@@ -61,6 +61,11 @@ type ModelClient struct {
 	// model is the default model identifier used when a prompt does not override it.
 	// model 是提示未指定模型时使用的默认模型标识符。
 	model string
+	// apiStyle selects the wire format: APIStyleChat (/chat/completions,
+	// the default) or APIStyleResponses (/responses). Set via SetAPIStyle.
+	// apiStyle 选择传输格式：APIStyleChat（/chat/completions，默认）或
+	// APIStyleResponses（/responses）。通过 SetAPIStyle 设置。
+	apiStyle string
 	// httpClient performs the underlying HTTP requests with an overall timeout.
 	// httpClient 执行带总体超时的底层 HTTP 请求。
 	httpClient *http.Client
@@ -82,6 +87,11 @@ func NewModelClient(apiKey, model, baseURL string) *ModelClient {
 		apiKey:  apiKey,
 		baseURL: baseURL,
 		model:   model,
+		// Default to the Chat Completions wire format for backwards
+		// compatibility; call SetAPIStyle(APIStyleResponses) to switch.
+		// 默认使用 Chat Completions 传输格式以保持向后兼容；
+		// 调用 SetAPIStyle(APIStyleResponses) 可切换。
+		apiStyle: APIStyleChat,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second, // 2 minute timeout for the entire request
 		},
@@ -314,6 +324,15 @@ func (c *ModelClient) Stream(ctx context.Context, prompt Prompt) (<-chan Respons
 	model := prompt.Model
 	if model == "" {
 		model = c.model
+	}
+
+	// Dispatch to the /responses implementation when the client is
+	// configured for the Responses API style; otherwise fall through to
+	// Chat Completions below.
+	// 当客户端配置为 Responses API 风格时分派到 /responses 实现；
+	// 否则继续走下方的 Chat Completions。
+	if c.apiStyle == APIStyleResponses {
+		return c.streamResponses(ctx, prompt, model)
 	}
 
 	// Convert the conversation history (plus system instructions) and the

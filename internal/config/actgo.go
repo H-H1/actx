@@ -37,6 +37,11 @@ type providerConfig struct {
 	// Models is the list of model identifiers offered by this provider.
 	// Models 是该提供商提供的模型标识符列表。
 	Models []string `json:"models"`
+	// APIStyle selects the wire format: "chat" (/chat/completions, default)
+	// or "responses" (/responses, e.g. DeepSeek's Responses-compatible base).
+	// APIStyle 选择传输格式："chat"（/chat/completions，默认）或
+	// "responses"（/responses，例如 DeepSeek 的 Responses 兼容基地址）。
+	APIStyle string `json:"api_style,omitempty"`
 }
 
 // resolveProvider returns the provider config for the active model_provider.
@@ -132,5 +137,8 @@ func applyACTXGoConfig(cfg *Config, c *ACTXgoConfig) {
 	}
 	if pc.BaseURL != "" {
 		cfg.BaseURL = pc.BaseURL
+	}
+	if pc.APIStyle != "" {
+		cfg.APIStyle = pc.APIStyle
 	}
 }

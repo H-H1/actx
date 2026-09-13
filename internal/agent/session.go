@@ -121,6 +121,17 @@ type Session struct {
 	// toolsModeSwitched 标记是否已自动从 api 模式降级到 prompt 模式，
 	// 保证单会话最多降级一次，避免每次请求都重试 API 模式。
 	toolsModeSwitched bool
+
+	// turnLog writes model input/output to a per-thread local file
+	// (.actx/logs/<threadID>.log): one file per conversation (window/
+	// task); every submission of the thread appends to it with its own
+	// Turn banner (which carries the submission ID).
+	// turnLog 将模型输入输出写入按线程划分的本地文件
+	// （.actx/logs/<threadID>.log）：每段对话（窗口/任务）一个文件；
+	// 线程内每次提交都追加进来，各自带 Turn 横幅（内含提交 ID）。
+	// nil-safe: a nil logger (file creation failed) drops all writes.
+	// nil 安全：日志器为 nil（文件创建失败）时所有写入被丢弃。
+	turnLog *TurnLogger
 }
 
 // SetPlanMode enables or disables plan mode for this session.
@@ -145,7 +156,8 @@ func (s *Session) Context() *ContextManager {
 	return s.context
 }
 
-// cancelTurn cancels the currently running turn, if any.
+// cancelTurn cancels the currently running turn, if any
+// .
 // cancelTurn 取消当前正在运行的轮次（如果有的话）。
 func (s *Session) cancelTurn() {
 	s.mu.Lock()
@@ -158,10 +170,20 @@ func (s *Session) cancelTurn() {
 
 // handleApproval delivers an approval response to the waiting tool executor.
 // handleApproval 将审批响应传递给等待中的工具执行器。
+// The write is non-blocking: when no requestApproval is waiting (e.g. a
+// stale verdict from an already-finished request), the verdict is dropped
+// instead of blocking the submission loop.
+// 写入是非阻塞的：当没有 requestApproval 在等待时（例如来自已完成请求的
+// 迟到裁决），丢弃该裁决而不是阻塞提交循环。
 func (s *Session) handleApproval(op protocol.Op) {
-	s.approvalCh <- approvalResponse{
+	select {
+	case s.approvalCh <- approvalResponse{
 		Approved: op.Approved,
 		Feedback: op.Feedback,
+	}:
+	default:
+		// No pending approval; drop the stale verdict.
+		// 没有等待中的审批；丢弃迟到的裁决。
 	}
 }
 
@@ -182,6 +204,14 @@ func (s *Session) requestApproval(req tools.ApprovalRequest) bool {
 		Command: req.Command,
 		Cwd:     req.Cwd,
 	})
+
+	// Drain any stale verdict left over from an earlier request so this
+	// request cannot be auto-answered by it.
+	// 清空早期请求可能滞留的裁决，避免本请求被其自动应答。
+	select {
+	case <-s.approvalCh:
+	default:
+	}
 
 	select {
 	case resp := <-s.approvalCh:
@@ -229,7 +259,7 @@ func (s *Session) runTurn(parentCtx context.Context, turnID protocol.TurnId, sub
 		// Build the prompt from conversation history.
 		// 从对话历史构建提示词。
 		specs := s.registry.Specs()
-		instructions := s.config.BaseInstructions + "\n\n" + s.config.UserInstructions
+		instructions := s.config.BaseInstructions + "\n\n" + platformInstructions() + "\n\n" + s.config.UserInstructions
 
 		var apiTools []model.ToolSpec
 		if s.config.ToolsMode == "prompt" {
@@ -245,6 +275,10 @@ func (s *Session) runTurn(parentCtx context.Context, turnID protocol.TurnId, sub
 			Instructions: instructions,
 			Model:        s.config.Model,
 		}
+
+		// Log the full model request (instructions + all input items).
+		// 记录完整的模型请求（instructions 与全部输入项）。
+		s.turnLog.LogRequest(prompt)
 
 		// Stream from the model.
 		// 从模型流式获取响应。
@@ -263,6 +297,11 @@ func (s *Session) runTurn(parentCtx context.Context, turnID protocol.TurnId, sub
 				continue
 			}
 			s.sendEvent(protocol.StreamErrorEvent(turnID, fmt.Sprintf("model request failed: %v", err)))
+			// Keep the failure visible in the thread log too: without this
+			// the log ends at "Request #N" with no clue what went wrong.
+			// 同时把失败写入线程日志：否则日志止于 "Request #N"，
+			// 无从得知出了什么问题。
+			s.turnLog.LogError(fmt.Sprintf("model request failed: %v", err))
 			return
 		}
 
@@ -271,6 +310,7 @@ func (s *Session) runTurn(parentCtx context.Context, turnID protocol.TurnId, sub
 		needsFollowUp, err := s.processStream(turnCtx, turnID, eventCh)
 		if err != nil {
 			s.sendEvent(protocol.StreamErrorEvent(turnID, err.Error()))
+			s.turnLog.LogError(err.Error())
 			return
 		}
 
@@ -356,6 +396,7 @@ func (s *Session) processStream(ctx context.Context, turnID protocol.TurnId, eve
 							if cleanText != "" {
 								s.context.Append(protocol.NewAssistantMessage(cleanText))
 								s.sendEvent(protocol.AgentMessageEvent(turnID, cleanText))
+								s.turnLog.LogItem(protocol.NewAssistantMessage(cleanText))
 							}
 							for _, call := range calls {
 								callID := protocol.NewCallId()
@@ -384,6 +425,7 @@ func (s *Session) processStream(ctx context.Context, turnID protocol.TurnId, eve
 
 					s.context.Append(protocol.NewAssistantMessage(text))
 					s.sendEvent(protocol.AgentMessageEvent(turnID, text))
+					s.turnLog.LogItem(protocol.NewAssistantMessage(text))
 					pendingMessage.Reset()
 				}
 			}
@@ -392,6 +434,7 @@ func (s *Session) processStream(ctx context.Context, turnID protocol.TurnId, eve
 			// 处理推理项。
 			if item.Type == protocol.RITypeReasoning {
 				s.context.Append(item)
+				s.turnLog.LogItem(item)
 				s.sendEvent(protocol.EventMsg{
 					Type:    protocol.EvAgentReasoning,
 					TurnID:  turnID,
@@ -428,6 +471,7 @@ func (s *Session) processStream(ctx context.Context, turnID protocol.TurnId, eve
 				if cleanText != "" {
 					s.context.Append(protocol.NewAssistantMessage(cleanText))
 					s.sendEvent(protocol.AgentMessageEvent(turnID, cleanText))
+					s.turnLog.LogItem(protocol.NewAssistantMessage(cleanText))
 				}
 				// 执行每个解析出的工具调用。
 				for _, call := range calls {
@@ -456,6 +500,7 @@ func (s *Session) processStream(ctx context.Context, turnID protocol.TurnId, eve
 
 		s.context.Append(protocol.NewAssistantMessage(text))
 		s.sendEvent(protocol.AgentMessageEvent(turnID, text))
+		s.turnLog.LogItem(protocol.NewAssistantMessage(text))
 	}
 
 	return needsFollowUp, nil
@@ -467,16 +512,22 @@ func (s *Session) processStream(ctx context.Context, turnID protocol.TurnId, eve
 // 并返回输出。它处理需要用户同意的命令的审批请求。
 // require user consent.
 func (s *Session) executeToolCall(ctx context.Context, turnID protocol.TurnId, item protocol.ResponseItem) (tools.ToolOutput, error) {
+	// Log the tool call itself (assistant role) to the model I/O log.
+	// 在模型输入输出日志中记录工具调用本身（assistant 角色）。
+	s.turnLog.LogItem(item)
+
 	// In plan mode, don't actually execute tools - return a plan response.
 	// 在计划模式下，不实际执行工具 - 返回计划响应。
 	if s.planMode {
-		return &tools.JSONToolOutput{
+		planOut := &tools.JSONToolOutput{
 			Data: map[string]interface{}{
 				"status":  "planned",
 				"message": fmt.Sprintf("Would execute: %s with args: %s", item.Name, item.Arguments),
 			},
 			Exit: 0,
-		}, nil
+		}
+		s.turnLog.LogItem(planOut.ToResponseItem(item.CallID))
+		return planOut, nil
 	}
 
 	s.logger.Info("executing tool call", "tool", item.Name, "call_id", item.CallID)
@@ -508,7 +559,15 @@ func (s *Session) executeToolCall(ctx context.Context, turnID protocol.TurnId, i
 		},
 	}
 
-	return s.router.Dispatch(ctx, invocation)
+	output, err := s.router.Dispatch(ctx, invocation)
+	// Log the tool result to the model I/O log.
+	// 在模型输入输出日志中记录工具执行结果。
+	if err != nil {
+		s.turnLog.LogItem(protocol.NewFunctionCallOutput(item.CallID, "error: "+err.Error()))
+	} else {
+		s.turnLog.LogItem(output.ToResponseItem(item.CallID))
+	}
+	return output, err
 }
 
 // ShellToolSpec returns the tool spec for the shell tool.

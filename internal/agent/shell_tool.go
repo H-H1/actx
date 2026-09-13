@@ -10,11 +10,13 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/H-H1/actx/internal/config"
 	"github.com/H-H1/actx/internal/model"
 	"github.com/H-H1/actx/internal/protocol"
 	"github.com/H-H1/actx/internal/tools"
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 // ShellTool executes shell commands on the local system. It is the primary
@@ -87,7 +89,11 @@ func (f *flexibleStringSlice) UnmarshalJSON(data []byte) error {
 func (t *ShellTool) Handle(ctx context.Context, inv tools.ToolInvocation) (tools.ToolOutput, error) {
 	var args shellArgs
 	if err := json.Unmarshal([]byte(inv.Arguments), &args); err != nil {
-		return nil, tools.NewRespondToModelError(fmt.Sprintf("invalid arguments: %v", err))
+		return nil, tools.NewRespondToModelError(fmt.Sprintf(
+			"invalid JSON arguments: %v. "+
+				"command must be a quoted string or array of strings, e.g. "+
+				`{"command": ["dir"]} or {"command": "dir"}`+
+				". Raw: %s", err, inv.Arguments))
 	}
 
 	if len(args.Command) == 0 {
@@ -159,8 +165,12 @@ func (t *ShellTool) Handle(ctx context.Context, inv tools.ToolInvocation) (tools
 
 	// Truncate output if too large.
 	// 如果输出太大则截断。
-	stdoutStr := truncateOutput(stdout.String(), 30000)
-	stderrStr := truncateOutput(stderr.String(), 10000)
+	// On Windows cmd.exe emits GBK-encoded text; convert to UTF-8 so the
+	// model and logs see proper Chinese characters instead of mojibake.
+	// Windows cmd.exe 输出 GBK 编码文本；转换为 UTF-8，
+	// 避免模型与日志看到乱码。
+	stdoutStr := truncateOutput(decodeShellOutput(stdout.Bytes()), 30000)
+	stderrStr := truncateOutput(decodeShellOutput(stderr.Bytes()), 10000)
 
 	return &tools.ExecOutput{
 		Stdout:     stdoutStr,
@@ -168,6 +178,46 @@ func (t *ShellTool) Handle(ctx context.Context, inv tools.ToolInvocation) (tools
 		Exit:       exitCode,
 		DurationMs: duration,
 	}, nil
+}
+
+// decodeShellOutput converts shell output bytes to a UTF-8 string.
+// decodeShellOutput 将 shell 输出字节转换为 UTF-8 字符串。
+// On Windows, cmd.exe emits GBK (CP936) for the system locale; a plain
+// string(b) cast produces mojibake for Chinese text. If the bytes are not
+// valid UTF-8, try GBK decoding and fall back to the raw bytes on failure.
+// 在 Windows 上 cmd.exe 按系统区域设置输出 GBK（CP936）；直接 string(b)
+// 转换会让中文变乱码。如果字节不是有效的 UTF-8，先尝试 GBK 解码，
+// 失败则回退为原始字节。
+func decodeShellOutput(b []byte) string {
+	if utf8.Valid(b) {
+		return string(b)
+	}
+	if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(b); err == nil {
+		return string(decoded)
+	}
+	return string(b)
+}
+
+// platformInstructions returns OS-specific shell guidance appended to the
+// system prompt so the model emits commands the host shell can actually run
+// (e.g. without it, models often send Unix commands like "pwd" or "ls" that
+// fail on Windows cmd.exe).
+// platformInstructions 返回追加到系统提示词的操作系统专属 shell 指引，
+// 让模型生成宿主 shell 真正能执行的命令（否则模型常发出 pwd/ls 等
+// 在 Windows cmd.exe 中会失败的 Unix 命令）。
+func platformInstructions() string {
+	if runtime.GOOS == "windows" {
+		return `# Platform
+
+You are running on Windows. The shell tool executes commands via cmd.exe.
+- Use Windows commands: dir (not ls), type (not cat), cd (not pwd), copy/move/del (not cp/mv/rm), findstr (not grep).
+- Use double quotes only; single quotes are literal characters in cmd.exe.
+- No Unix shell features: no $() substitution, no backticks, no 2>/dev/null (use 2>nul).
+- Path separator is backslash (\).`
+	}
+	return `# Platform
+
+You are running on a Unix-like system. The shell tool executes commands via sh.`
 }
 
 // prepareCommand converts the command array into a shell invocation.

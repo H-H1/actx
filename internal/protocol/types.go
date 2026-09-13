@@ -7,8 +7,10 @@ package protocol
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 
+	"github.com/H-H1/snowflakeid/snowflakeid"
 	"github.com/google/uuid"
 )
 
@@ -36,28 +38,73 @@ type TurnId = string
 // SubmissionId 将提交与其产生的事件关联起来。
 type SubmissionId = string
 
-// NewSubmissionId generates a unique submission ID.
-// NewSubmissionId 生成一个唯一的提交 ID。
+// subIDGen is the process-wide snowflake generator behind submission IDs.
+// It is created once at package load; snowflake IDs embed a millisecond
+// timestamp plus machine ID, so they stay unique for the process lifetime
+// and are roughly time-ordered (handy when scanning logs chronologically).
+// subIDGen 是提交 ID 背后的进程级雪花生成器。包加载时创建一次；
+// 雪花 ID 内嵌毫秒时间戳与机器 ID，进程生命周期内保持唯一，
+// 且大体按时间有序（按时间翻日志时很好用）。
+var subIDGen = newIDGen()
+
+// newIDGen builds the generator with graceful degradation: if automatic
+// machine-ID derivation fails (e.g. no MAC address), fall back to machine
+// ID 0, which is still unique for single-process use.
+// newIDGen 构建生成器并做优雅降级：若自动机器 ID 派生失败（如取不到
+// MAC 地址），退化为机器 ID 0，单进程使用下仍然唯一。
+func newIDGen() *snowflakeid.Snowflake4 {
+	if s, err := snowflakeid.NewSnowflake4Auto(); err == nil {
+		return s
+	}
+	s, _ := snowflakeid.NewSnowflake4(0) // 0 在合法范围 [0,1023] 内，不会失败
+	return s
+}
+
+// NewSubmissionId generates a unique submission ID as a decimal string.
+// SubmissionId is string-typed so the full int64 range survives JSON round
+// trips through JS clients (which lose precision beyond 2^53); the UUID
+// fallback is defensive — NextID currently never fails, but ID uniqueness
+// must never be silently compromised.
+// NewSubmissionId 生成唯一的提交 ID（十进制字符串）。SubmissionId 为字符串
+// 类型，使 int64 全范围经过 JS 客户端的 JSON 往返仍保持精度（JS Number
+// 超过 2^53 会丢精度）；UUID 回退属防御式设计——NextID 目前恒成功，
+// 但 ID 唯一性绝不能被静默破坏。
 func NewSubmissionId() SubmissionId {
-	return uuid.NewString()
+	id, err := subIDGen.NextID()
+	if err != nil {
+		return uuid.NewString()
+	}
+	return strconv.FormatInt(id, 10)
 }
 
 // NewSessionId generates a unique session ID.
 // NewSessionId 生成一个唯一的会话 ID。
 func NewSessionId() SessionId {
-	return uuid.NewString()
+	id, err := subIDGen.NextID()
+	if err != nil {
+		return uuid.NewString()
+	}
+	return strconv.FormatInt(id, 10)
 }
 
 // NewThreadId generates a unique thread ID.
 // NewThreadId 生成一个唯一的线程 ID。
 func NewThreadId() ThreadId {
-	return uuid.NewString()
+	id, err := subIDGen.NextID()
+	if err != nil {
+		return uuid.NewString()
+	}
+	return strconv.FormatInt(id, 10)
 }
 
 // NewTurnId generates a unique turn ID.
 // NewTurnId 生成一个唯一的轮次 ID。
 func NewTurnId() TurnId {
-	return uuid.NewString()
+	id, err := subIDGen.NextID()
+	if err != nil {
+		return uuid.NewString()
+	}
+	return strconv.FormatInt(id, 10)
 }
 
 // NewCallId generates a unique tool call ID.

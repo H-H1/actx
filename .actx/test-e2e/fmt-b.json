@@ -1,0 +1,24 @@
+{
+  "model": "deepseek-v4-flash",
+  "stream": false,
+  "input": [
+    {"type": "message", "role": "user", "content": "list files"},
+    {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "I should run dir to list files."}]},
+    {"type": "function_call", "call_id": "call_0", "name": "shell", "arguments": "{\"command\": [\"dir\"]}"},
+    {"type": "function_call_output", "call_id": "call_0", "output": "hello.txt"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "shell",
+      "description": "Execute a shell command.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {"type": "array", "items": {"type": "string"}, "description": "The command to execute as an array of strings."}
+        },
+        "required": ["command"]
+      }
+    }
+  ]
+}

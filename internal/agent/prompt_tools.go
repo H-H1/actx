@@ -73,6 +73,12 @@ func BuildToolPrompt(specs []model.ToolSpec) string {
 	b.WriteString("```tool\n")
 	b.WriteString(`{"name": "工具名", "arguments": {"参数名": "参数值"}}`)
 	b.WriteString("\n```\n\n")
+	b.WriteString("重要：arguments 必须是严格合法的 JSON：\n")
+	b.WriteString("- 字符串值必须用双引号括起来，不允许裸露的标识符（如 {\"command\": dir} 是非法的，应写 {\"command\": \"dir\"}）。\n")
+	b.WriteString("- 数组类型的参数（如 shell 的 command）必须写成 JSON 数组：{\"command\": [\"dir\"]}。\n")
+	b.WriteString("示例（执行 shell 命令）：\n\n```tool\n")
+	b.WriteString(`{"name": "shell", "arguments": {"command": ["dir"]}}`)
+	b.WriteString("\n```\n\n")
 	b.WriteString("每次只调用一个工具，等待工具执行结果后再决定下一步操作。\n\n")
 
 	for i, spec := range specs {

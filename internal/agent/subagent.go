@@ -20,6 +20,9 @@ type SubAgent struct {
 	// session is the underlying Session that runs the sub-agent's turns.
 	// session 是运行子代理轮次的底层 Session。
 	session *Session
+	// prompt is the task description, retained for logging in Run.
+	// prompt 是任务描述，保留用于 Run 中的日志记录。
+	prompt string
 	// cancel cancels the sub-agent's context to stop it.
 	// cancel 取消子代理的上下文以停止其运行。
 	cancel context.CancelFunc
@@ -59,6 +62,7 @@ func SpawnSubAgent(args SubAgentArgs) (*SubAgent, error) {
 	}
 
 	client := model.NewModelClient(args.APIKey, args.Config.Model, args.BaseURL)
+	client.SetAPIStyle(args.Config.APIStyle)
 
 	if args.Registry == nil {
 		args.Registry = tools.NewToolRegistry()
@@ -90,6 +94,12 @@ func SpawnSubAgent(args SubAgentArgs) (*SubAgent, error) {
 		approvalCh: make(chan approvalResponse, 1),
 	}
 	session.context = NewContextManager(args.Config.BaseInstructions)
+	// The sub-agent is its own task: it gets a dedicated thread log file
+	// under the same .actx/logs/ directory, named by its own thread ID,
+	// separate from the parent conversation's file.
+	// 子代理即独立任务：在同一个 .actx/logs/ 目录下拥有以自己的
+	// 线程 ID 命名的专属日志文件，与父对话的文件相互独立。
+	session.turnLog = NewTurnLogger(session.threadID)
 
 	// Add the prompt as user input.
 	// 将提示作为用户输入添加。
@@ -98,6 +108,7 @@ func SpawnSubAgent(args SubAgentArgs) (*SubAgent, error) {
 	return &SubAgent{
 		id:      session.id,
 		session: session,
+		prompt:  args.Prompt,
 		cancel:  cancel,
 	}, nil
 }
@@ -106,13 +117,24 @@ func SpawnSubAgent(args SubAgentArgs) (*SubAgent, error) {
 // Run 执行子代理的轮次并在完成时返回。
 func (sa *SubAgent) Run(parentCtx context.Context) {
 	turnID := protocol.NewTurnId()
-	sa.session.runTurn(parentCtx, turnID, protocol.NewSubmissionId())
+	subID := protocol.NewSubmissionId()
+	// Log the prompt and turn banner into the sub-agent's own thread file
+	// before running, mirroring handleUserInput of the main session.
+	// 运行前把提示词与轮次横幅记入子代理自己的线程日志文件，
+	// 与主会话的 handleUserInput 行为保持一致。
+	sa.session.turnLog.LogTurnStart(turnID, subID, sa.session.config.Model)
+	sa.session.turnLog.LogItem(protocol.NewUserMessage(sa.prompt))
+	sa.session.runTurn(parentCtx, turnID, subID)
+	// The sub-agent runs a single turn; flush its log file when done.
+	// 子代理只运行一个轮次；结束后刷新并关闭其日志文件。
+	sa.session.turnLog.Close()
 }
 
 // Cancel stops the sub-agent.
 // Cancel 停止子代理。
 func (sa *SubAgent) Cancel() {
 	sa.cancel()
+	sa.session.turnLog.Close()
 }
 
 // ID returns the sub-agent's session ID.

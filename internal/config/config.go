@@ -1,4 +1,4 @@
-﻿package config
+package config
 
 import (
 	"fmt"
@@ -233,6 +233,13 @@ type Config struct {
 	// Populated from .actx/config.json.
 	// BaseURL 是 API 基础 URL，覆盖模型客户端的默认值。从 .actx/config.json 填充。
 	BaseURL string
+
+	// APIStyle selects the model API wire format: "chat" (/chat/completions,
+	// the default) or "responses" (/responses). Populated from
+	// .actx/config.json provider "api_style".
+	// APIStyle 选择模型 API 传输格式："chat"（/chat/completions，默认）或
+	// "responses"（/responses）。从 .actx/config.json 提供商的 "api_style" 填充。
+	APIStyle string
 
 	// ApprovalPolicy controls when the user is asked to approve commands.
 	// ApprovalPolicy 控制用户何时被要求批准命令。

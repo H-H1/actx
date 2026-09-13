@@ -1,4 +1,4 @@
-﻿// Package agent implements the core ACTX agent loop. It provides the ACTX
+// Package agent implements the core ACTX agent loop. It provides the ACTX
 // 包 agent 实现了核心 ACTX 代理循环。它提供 ACTX 结构体作为提交操作和接收事件的主要接口，
 // struct as the main interface for submitting operations and receiving events,
 // 由后台提交循环驱动代理的轮次周期。
@@ -80,9 +80,12 @@ func Spawn(args ACTXArgs) (*ACTX, error) {
 			return nil, fmt.Errorf("either ModelClient or APIKey must be provided")
 		}
 		// Build an OpenAI-compatible streaming client bound to the
-		// configured model and endpoint.
+		// configured model and endpoint. The provider's api_style selects
+		// the Chat Completions or Responses wire format.
 		// 构建绑定到所配置模型与端点的 OpenAI 兼容流式客户端。
+		// 提供商的 api_style 选择 Chat Completions 或 Responses 传输格式。
 		args.ModelClient = model.NewModelClient(args.APIKey, args.Config.Model, args.BaseURL)
+		args.ModelClient.SetAPIStyle(args.Config.APIStyle)
 	}
 	// Fall back to an empty registry if none was provided.
 	// 如果未提供注册表，则回退到空注册表。
@@ -167,6 +170,14 @@ func Spawn(args ACTXArgs) (*ACTX, error) {
 	// ContextManager 存储对话历史；其首项是由 BaseInstructions
 	// 构建的 system 消息。
 	session.context = NewContextManager(args.Config.BaseInstructions)
+	// Per-thread model I/O log under .actx/logs/<threadID>.log: one file per
+	// conversation (window/task). Every submission of the thread appends to
+	// the same file, with its own Turn banner inside; nil (and silently
+	// skipped) if the file cannot be created.
+	// 按线程划分的模型输入输出日志，位于 .actx/logs/<threadID>.log：
+	// 每段对话（窗口/任务）一个文件。线程内的每次提交都追加到同一文件，
+	// 各自带 Turn 横幅；文件无法创建时为 nil（写入被静默跳过）。
+	session.turnLog = NewTurnLogger(session.threadID)
 	// Link the session into the facade.
 	// 把 session 挂到门面上。
 	ACTX.session = session
@@ -259,8 +270,24 @@ func (c *ACTX) Session() *Session {
 // submissionLoop is the background goroutine that processes submissions.
 // submissionLoop 是处理提交的后台 goroutine。
 // It reads from the submission channel and dispatches each Op to the
-// 它从提交通道读取并将每个 Op 分发给相应的处理器。
 // appropriate handler.
+//
+// Turns run in a background goroutine so the loop keeps consuming the
+// submission queue while a turn is in flight. This is essential for
+// approvals: a running turn blocks inside requestApproval waiting for the
+// user's verdict, and the verdict arrives as a queued op — if the loop were
+// blocked inside the turn, handleApproval would never run (deadlock).
+// User-input and compact ops are queued while a turn is running so turns
+// stay strictly serial and Session access stays single-threaded; interrupt /
+// approval / shutdown ops are processed immediately (they are safe:
+// turnCancel is mutex-guarded, approvalCh is a channel).
+// 轮次在后台 goroutine 中运行，因此循环在轮次进行期间仍持续消费提交队列。
+// 这对审批至关重要：运行中的轮次在 requestApproval 内阻塞等待用户裁决，
+// 而裁决以排队 Op 的形式到达——如果循环阻塞在轮次内部，
+// handleApproval 将永远不会执行（死锁）。用户输入与压缩 Op 在轮次运行
+// 期间排队，保持轮次严格串行、Session 访问单线程；
+// 中断/审批/关闭 Op 立即处理（它们是安全的：turnCancel 有互斥锁保护，
+// approvalCh 是通道）。
 func (c *ACTX) submissionLoop(ctx context.Context) {
 	// Signal WaitGroup completion on exit so Shutdown's Wait unblocks.
 	// 退出时通知 WaitGroup 完成，使 Shutdown 的 Wait 解除阻塞。
@@ -268,10 +295,45 @@ func (c *ACTX) submissionLoop(ctx context.Context) {
 	// Close the event channel so NextEvent consumers can detect shutdown
 	// (ok=false) and stop polling.
 	// 关闭事件通道，让 NextEvent 消费方能感知关闭（ok=false）
-	// 并停止轮询。
 	defer close(c.rxEvent)
+	// Flush and close the per-session model I/O log on loop exit.
+	// 循环退出时刷新并关闭按会话划分的模型输入输出日志。
+	defer c.session.turnLog.Close()
+
+	// turnDone (cap 1) receives a signal when the running turn finishes.
+	// turnDone（容量 1）在运行中的轮次结束时收到信号。
+	turnDone := make(chan struct{}, 1)
+	// turnIdle reports whether no turn is currently running.
+	// turnIdle 报告当前是否没有轮次在运行。
+	turnIdle := true
+	// queued holds user-input/compact ops deferred while a turn runs.
+	// queued 保存轮次运行期间被推迟的用户输入/压缩 Op。
+	var queued []protocol.Submission
+
+	// startTurn launches one queued submission as a turn goroutine.
+	// startTurn 把一个排队的提交作为轮次 goroutine 启动。
+	startTurn := func(sub protocol.Submission) {
+		turnIdle = false
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.handleSubmission(ctx, sub)
+			// Signal the loop; the buffered channel guarantees this never
+			// blocks even if the loop is momentarily busy.
+			// 通知循环；缓冲通道保证即使循环暂时忙碌也不会阻塞。
+			turnDone <- struct{}{}
+		}()
+	}
 
 	for {
+		// Launch the next queued turn when idle.
+		// 空闲时启动下一个排队的轮次。
+		if turnIdle && len(queued) > 0 {
+			sub := queued[0]
+			queued = queued[1:]
+			startTurn(sub)
+		}
+
 		select {
 		// Context cancelled (Shutdown handled or parent cancelled):
 		// stop draining and exit immediately.
@@ -279,6 +341,10 @@ func (c *ACTX) submissionLoop(ctx context.Context) {
 		// 停止取数并立即退出。
 		case <-ctx.Done():
 			return
+		// The running turn finished; the loop head starts the next one.
+		// 运行中的轮次结束；循环头部会启动下一个。
+		case <-turnDone:
+			turnIdle = true
 		// Take the next submission from the queue.
 		// 从队列取出下一个提交。
 		case sub, ok := <-c.txSub:
@@ -287,13 +353,28 @@ func (c *ACTX) submissionLoop(ctx context.Context) {
 			if !ok {
 				return
 			}
-			// Dispatch by op type (user input, interrupt, approval...).
-			// 按 Op 类型分发（用户输入、中断、审批……）。
-			// Calls are serial: one submission finishes before the next
-			// is taken, keeping Session access single-threaded.
-			// 调用是串行的：处理完一个提交才取下一个，
-			// 保证 Session 的访问是单线程的。
-			c.handleSubmission(ctx, sub)
+			switch sub.Op.Type {
+			case protocol.OpUserInput, protocol.OpCompact:
+				// Defer while a turn runs; dispatched immediately otherwise.
+				// 轮次运行期间推迟；否则立即分发。
+				if turnIdle {
+					startTurn(sub)
+				} else {
+					queued = append(queued, sub)
+				}
+			case protocol.OpExecApproval, protocol.OpPatchApproval:
+				// Safe during a turn: handleApproval writes to the buffered
+				// approvalCh, unblocking requestApproval.
+				// 轮次期间安全：handleApproval 写入带缓冲的 approvalCh，
+				// 解除 requestApproval 的阻塞。
+				c.handleSubmission(ctx, sub)
+			case protocol.OpInterrupt:
+				// Safe during a turn: cancelTurn is mutex-guarded.
+				// 轮次期间安全：cancelTurn 有互斥锁保护。
+				c.handleSubmission(ctx, sub)
+			default:
+				c.handleSubmission(ctx, sub)
+			}
 		}
 	}
 }
@@ -339,6 +420,18 @@ func (c *ACTX) handleSubmission(ctx context.Context, sub protocol.Submission) {
 // handleUserInput processes a user input operation by starting a new turn.
 // handleUserInput 通过启动新轮次来处理用户输入操作。
 func (c *ACTX) handleUserInput(ctx context.Context, sub protocol.Submission) {
+	// Allocate a fresh turn ID for this round of the sampling loop.
+	// 为本轮采样循环分配新的轮次 ID。
+	turnID := protocol.NewTurnId()
+	// Mark the turn start in the model I/O log BEFORE the user items so
+	// the banner groups the messages that triggered the turn. The banner
+	// carries the submission ID alongside the turn ID so individual
+	// submissions stay traceable inside the shared thread log file.
+	// 在用户消息之前于模型输入输出日志中标记轮次开始，
+	// 使横幅把触发本轮的消息归入同一组。横幅在轮次 ID 之外携带
+	// 提交 ID，使共享的线程日志文件内每次提交仍可单独追溯。
+	c.session.turnLog.LogTurnStart(turnID, sub.ID, c.session.config.Model)
+
 	// Add user messages to context.
 	// 将用户消息添加上下文。
 	// They land in PendingUserMessages and are also echoed as
@@ -347,11 +440,14 @@ func (c *ACTX) handleUserInput(ctx context.Context, sub protocol.Submission) {
 	// 以 EvUserMessage 事件回显。
 	for _, item := range sub.Op.Items {
 		c.session.context.Append(item)
+		// Log user input here (not in LogRequest) so every context item
+		// is written exactly once at append time; request headers then
+		// never duplicate history.
+		// 在此记录用户输入（而非 LogRequest），使每个上下文条目
+		// 在追加时只记录一次；请求头不再重复历史。
+		c.session.turnLog.LogItem(item)
 	}
 
-	// Allocate a fresh turn ID for this round of the sampling loop.
-	// 为本轮采样循环分配新的轮次 ID。
-	turnID := protocol.NewTurnId()
 	// Announce turn start so the UI can flip its "running" state.
 	// 宣告轮次开始，让 UI 切换到"运行中"状态。
 	c.session.sendEvent(protocol.TurnStartedEvent(turnID))

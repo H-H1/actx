@@ -1,0 +1,9 @@
+# Local secrets & logs — do not commit
+# 本地敏感配置与日志 — 不要提交
+.actx/config.json
+.actx/logs/
+*.local.json
+.env
+__debug_bin*
+*.exe
+*.exe~

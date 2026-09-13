@@ -1,7 +1,8 @@
-﻿package protocol
+package protocol
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 )
 
@@ -79,6 +80,30 @@ func TestEventHelpers(t *testing.T) {
 	ev = TurnStartedEvent(turnID)
 	if ev.Type != EvTurnStarted || ev.TurnID != turnID {
 		t.Errorf("unexpected event: %+v", ev)
+	}
+}
+
+func TestNewSubmissionId(t *testing.T) {
+	seen := make(map[SubmissionId]struct{}, 1000)
+	prev := int64(0)
+	for i := 0; i < 1000; i++ {
+		id := NewSubmissionId()
+		// 十进制字符串：int64 全范围可安全往返 JSON。
+		// Decimal string: the full int64 range survives JSON round trips.
+		n, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			t.Fatalf("ID %q is not a decimal int64: %v", id, err)
+		}
+		if _, dup := seen[id]; dup {
+			t.Fatalf("duplicate submission ID %q at iteration %d", id, i)
+		}
+		seen[id] = struct{}{}
+		// 雪花 ID 内嵌时间戳，同进程内单调不减。
+		// Snowflake IDs embed a timestamp: monotonic within a process.
+		if n < prev {
+			t.Fatalf("ID went backwards: prev=%d cur=%d", prev, n)
+		}
+		prev = n
 	}
 }
 

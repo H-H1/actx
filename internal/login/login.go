@@ -107,9 +107,51 @@ func DeleteToken(ACTXHome string) error {
 	return nil
 }
 
-// GetAPIKey retrieves the API key from the stored token or the
-// OPENAI_API_KEY environment variable.
-// GetAPIKey 从存储的令牌或 OPENAI_API_KEY 环境变量中获取 API 密钥。
+// loadLocalConfigAPIKey reads the API key from the local config.json file.
+// loadLocalConfigAPIKey 从本地 config.json 文件读取 API 密钥。
+// Searches .actx/config.json from the current directory upward through parents
+// so running inside a subdirectory (e.g. cmd/actx) still finds the project
+// root config, then falls back to ACTX home.
+// 从当前目录逐级向上搜索 .actx/config.json（在子目录如 cmd/actx 中运行
+// 也能找到项目根配置），再回退到 ACTX 主目录。
+func loadLocalConfigAPIKey(ACTXHome string) (string, error) {
+	var paths []string
+	// Walk from cwd upward, collecting .actx/config.json candidates.
+	// 从当前目录逐级向上收集 .actx/config.json 候选路径。
+	if cwd, err := os.Getwd(); err == nil {
+		for dir := cwd; ; dir = filepath.Dir(dir) {
+			paths = append(paths, filepath.Join(dir, ".actx", "config.json"))
+			if parent := filepath.Dir(dir); parent == dir {
+				break
+			}
+		}
+	}
+	paths = append(paths, filepath.Join(ACTXHome, "config.json"))
+
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("read local config %s: %w", path, err)
+		}
+		var cfg struct {
+			APIKey string `json:"api_key"`
+		}
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return "", fmt.Errorf("parse local config %s: %w", path, err)
+		}
+		if cfg.APIKey != "" {
+			return cfg.APIKey, nil
+		}
+	}
+	return "", nil
+}
+
+// GetAPIKey retrieves the API key from the stored token, the OPENAI_API_KEY
+// environment variable, or the local config.json file.
+// GetAPIKey 从存储的令牌、OPENAI_API_KEY 环境变量或本地 config.json 文件中获取 API 密钥。
 func GetAPIKey(ACTXHome string) (string, error) {
 	// Check environment variable first.
 	// 首先检查环境变量。
@@ -127,7 +169,17 @@ func GetAPIKey(ACTXHome string) (string, error) {
 		return token.APIKey, nil
 	}
 
-	return "sk-19f8d7233d294a90b20315cd008fb0ab", nil
+	// Fall back to local config.json (not committed to git).
+	// 回退到本地 config.json（不提交到 git）。
+	key, err := loadLocalConfigAPIKey(ACTXHome)
+	if err != nil {
+		return "", err
+	}
+	if key != "" {
+		return key, nil
+	}
+
+	return "", fmt.Errorf("no API key found: set OPENAI_API_KEY, login, or add api_key to .actx/config.json")
 }
 
 // StoreAPIKey saves an API key to the auth file.
