@@ -336,6 +336,17 @@ func (s *Session) processStream(ctx context.Context, turnID protocol.TurnId, eve
 		default:
 		}
 
+		// Write the SSE event trail fragment carried on the event before
+		// handling the event itself. Both writes happen on this single
+		// goroutine, so trail lines always precede the LogItem lines of the
+		// event they belong to — no cross-goroutine interleaving.
+		// 在处理事件之前，先写入事件携带的 SSE 轨迹片段。两处写入都在
+		// 本 goroutine 内完成，因此轨迹行始终先于其所属事件的 LogItem
+		// 行落盘——不会出现跨 goroutine 的交错乱序。
+		if ev.Trail != "" {
+			s.turnLog.LogSSE(ev.Trail)
+		}
+
 		switch ev.Type {
 		case model.EventOutputTextDelta:
 			// Stream the text delta to the client.
@@ -447,9 +458,26 @@ func (s *Session) processStream(ctx context.Context, turnID protocol.TurnId, eve
 				s.sendEvent(protocol.TokenCountEvent(turnID, ev.Usage.InputTokens, ev.Usage.OutputTokens))
 			}
 
+		case model.EventIncomplete:
+			// Truncated response (e.g. max_output_tokens): already-delivered
+			// items stay valid, but the turn must end with a visible error
+			// instead of pretending the model finished normally.
+			// 响应被截断（如达到 max_output_tokens）：已交付的条目仍然
+			// 有效，但轮次必须以可见错误结束，而不是假装模型正常完成。
+			msg := "model stream error"
+			if ev.Err != nil {
+				msg = ev.Err.Error()
+			}
+			return false, fmt.Errorf("%s", msg)
+
 		case model.EventError, model.EventFailed:
 			msg := "model stream error"
-			if ev.Item != nil {
+			if ev.Err != nil {
+				msg = ev.Err.Error()
+			} else if ev.Item != nil {
+				// Fallback for Chat Completions style events that still
+				// carry errors as items.
+				// 兜底：Chat Completions 风格的事件仍以条目形式携带错误。
 				msg = ev.Item.GetText()
 			}
 			return false, fmt.Errorf("%s", msg)

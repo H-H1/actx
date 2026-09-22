@@ -29,21 +29,69 @@ const DefaultBaseURL = "https://api.deepseek.com"
 // Responses API 发出的 SSE 事件类型。这些作为 ResponseEvent 的 Type 字段暴露，
 // 以便调用者可以在不硬编码字符串的情况下对它们进行 switch 判断。
 const (
-	EventResponseCreated       = "response.created"
-	EventResponseInProgress    = "response.in_progress"
-	EventOutputItemAdded       = "response.output_item.added"
-	EventOutputItemDone        = "response.output_item.done"
-	EventContentPartAdded      = "response.content_part.added"
-	EventContentPartDone       = "response.content_part.done"
-	EventOutputTextDelta       = "response.output_text.delta"
-	EventOutputTextDone        = "response.output_text.done"
-	EventReasoningDelta        = "response.reasoning_summary_text.delta"
+	// EventResponseCreated 响应已创建：流式响应的首个事件，状态为 in_progress。
+	// EventResponseCreated Response created: the first event of a streaming response, with status "in_progress".
+	EventResponseCreated = "response.created"
+
+	// EventResponseInProgress 响应进行中：响应正在生成。
+	// EventResponseInProgress Response in progress: the response is currently being generated.
+	EventResponseInProgress = "response.in_progress"
+
+	// EventOutputItemAdded 输出项已添加：一个输出 item（如 message、reasoning、function_call）开始。
+	// EventOutputItemAdded Output item added: an output item (e.g. message, reasoning, function_call) has started.
+	EventOutputItemAdded = "response.output_item.added"
+
+	// EventOutputItemDone 输出项已完成：一个输出 item 完成。
+	// EventOutputItemDone Output item done: an output item has completed.
+	EventOutputItemDone = "response.output_item.done"
+
+	// EventContentPartAdded 内容块已添加：输出 item 中的一个内容块开始。
+	// EventContentPartAdded Content part added: a content part within an output item has started.
+	EventContentPartAdded = "response.content_part.added"
+
+	// EventContentPartDone 内容块已完成：输出 item 中的一个内容块完成。
+	// EventContentPartDone Content part done: a content part within an output item has completed.
+	EventContentPartDone = "response.content_part.done"
+
+	// EventOutputTextDelta 输出文本增量：每生成一小段输出文本就推送一次，用于实现打字机效果。
+	// EventOutputTextDelta Output text delta: emitted each time a small chunk of output text is generated, used for typewriter-style streaming.
+	EventOutputTextDelta = "response.output_text.delta"
+
+	// EventOutputTextDone 输出文本已完成：输出文本完成，携带完整文本内容。
+	// EventOutputTextDone Output text done: the output text is complete, carrying the full text content.
+	EventOutputTextDone = "response.output_text.done"
+
+	// EventReasoningDelta 推理摘要增量：推理摘要的文本增量，用于流式展示模型的思考过程摘要。
+	// EventReasoningDelta Reasoning summary delta: a text delta of the reasoning summary, used to stream the model's summarized thought process.
+	EventReasoningDelta = "response.reasoning_summary_text.delta"
+
+	// EventFunctionCallArgsDelta 函数调用参数增量：函数调用参数的增量，逐步推送参数内容。
+	// EventFunctionCallArgsDelta Function call arguments delta: an increment of function call arguments, streaming the arguments piece by piece.
 	EventFunctionCallArgsDelta = "response.function_call_arguments.delta"
-	EventFunctionCallArgsDone  = "response.function_call_arguments.done"
-	EventRefusalDelta          = "response.refusal.delta"
-	EventCompleted             = "response.completed"
-	EventFailed                = "response.failed"
-	EventError                 = "error"
+
+	// EventFunctionCallArgsDone 函数调用参数已完成：函数调用参数完成，携带完整参数。
+	// EventFunctionCallArgsDone Function call arguments done: the function call arguments are complete, carrying the full arguments.
+	EventFunctionCallArgsDone = "response.function_call_arguments.done"
+
+	// EventRefusalDelta 拒绝文本增量：模型拒绝回答时，逐步推送拒绝内容。
+	// EventRefusalDelta Refusal delta: emitted incrementally when the model refuses to answer, streaming the refusal content.
+	EventRefusalDelta = "response.refusal.delta"
+
+	// EventCompleted 响应已完成：响应正常完成，是最后一个事件，携带完整 response 对象和 usage 信息。
+	// EventCompleted Response completed: the response finished successfully; the final event, carrying the full response object and usage info.
+	EventCompleted = "response.completed"
+
+	// EventIncomplete 标记被截断的响应（如达到 max_output_tokens）；Err 携带截断原因。
+	// EventIncomplete marks a truncated response (e.g. reached max_output_tokens); Err carries the incomplete reason.
+	EventIncomplete = "response.incomplete"
+
+	// EventFailed 响应失败：响应失败，携带含 error 详情的 response 对象。
+	// EventFailed Response failed: the response failed, carrying a response object with error details.
+	EventFailed = "response.failed"
+
+	// EventError 通用错误事件。
+	// EventError Generic error event.
+	EventError = "error"
 )
 
 // ModelClient is an HTTP client for the OpenAI Responses API. It is safe for
@@ -145,6 +193,25 @@ type ResponseEvent struct {
 	// that expose a reasoning_content stream (e.g. DeepSeek-R1, o1-style).
 	// DeltaReasoning 携带来自暴露 reasoning_content 流的模型（如 DeepSeek-R1、o1 系列）的增量思考内容。
 	DeltaReasoning string
+	// Err carries the typed error for EventFailed / EventIncomplete /
+	// EventError events (classifyResponsesError output or a plain error).
+	// Err 为 EventFailed / EventIncomplete / EventError 事件携带类型化
+	// 错误（classifyResponsesError 的输出或普通错误）。
+	Err error
+	// ItemID / CallID attribute delta events to their output item, so
+	// concurrent streams (e.g. multiple tool calls) can be told apart.
+	// ItemID / CallID 把增量事件归属到其输出项，使并发流（如多个工具
+	// 调用）的增量可以相互区分。
+	ItemID string
+	CallID string
+	// Trail carries a self-contained SSE event-trail fragment (complete
+	// lines prefixed with [type]) for debugging. It rides on the event
+	// itself so the consumer writes it single-threaded, in exact event
+	// order, instead of racing with item logging from another goroutine.
+	// Trail 携带自包含的 SSE 事件轨迹片段（带 [type] 前缀的完整行），
+	// 用于调试。它随事件本身传递，由消费方单线程按真实事件顺序写入，
+	// 避免与另一个 goroutine 的条目日志写入相互竞争乱序。
+	Trail string
 }
 
 // chatRequest is the JSON body sent to the /chat/completions endpoint.

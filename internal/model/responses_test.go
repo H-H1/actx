@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,38 @@ import (
 
 	"github.com/H-H1/actx/internal/protocol"
 )
+
+// TestClassifyResponsesError verifies response.failed messages map to typed
+// errors (sentinel kinds via errors.Is, rate limit via errors.As).
+// TestClassifyResponsesError 验证 response.failed 消息映射为类型化错误
+// （哨兵类别经 errors.Is 判断，限速经 errors.As 判断）。
+func TestClassifyResponsesError(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want error
+	}{
+		{"This model's maximum context length is 65536 tokens", ErrContextWindowExceeded},
+		{"input exceeds the context window", ErrContextWindowExceeded},
+		{"Insufficient Balance", ErrQuotaExceeded},
+		{"The server is overloaded", ErrServerOverloaded},
+	}
+	for _, tc := range cases {
+		if err := classifyResponsesError(tc.msg); !errors.Is(err, tc.want) {
+			t.Errorf("classify(%q) = %v, want %v", tc.msg, err, tc.want)
+		}
+	}
+
+	var rl *RateLimitError
+	if err := classifyResponsesError("Rate limit reached, please retry"); !errors.As(err, &rl) {
+		t.Errorf("classify rate limit = %v, want *RateLimitError", err)
+	}
+
+	apiErr := classifyResponsesError("something else entirely")
+	var ae *APIError
+	if !errors.As(apiErr, &ae) || ae.Message != "something else entirely" {
+		t.Errorf("classify fallback = %v, want *APIError with original message", apiErr)
+	}
+}
 
 // TestBuildResponsesInput verifies conversation items convert to the
 // /responses input format: system messages are dropped, messages become
@@ -99,6 +132,51 @@ func TestBuildResponsesInputEmptyOutput(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"output":""`) {
 		t.Errorf("marshaled JSON missing empty output field: %s", raw)
+	}
+}
+
+// TestBuildResponsesInputParallelCalls verifies interleaved parallel tool
+// calls are regrouped so all calls precede their outputs. When tools execute
+// during the stream, the context stores call_a, output_a, call_b, output_b;
+// echoing that back strands call_b after a tool message with no reasoning in
+// front, which DeepSeek's thinking mode rejects with a 400. The regrouped
+// order (reasoning, message, call_a, call_b, output_a, output_b) merges the
+// whole turn into one assistant message.
+// TestBuildResponsesInputParallelCalls 验证交错的并行工具调用被重新分组：
+// 所有 call 排在其 output 之前。工具在流中执行时，上下文按
+// call_a、output_a、call_b、output_b 的顺序存储；原样回传会使 call_b 前面
+// 是 tool 消息而无 reasoning，被 DeepSeek 思维链模式以 400 拒绝。重排后的
+// 顺序（reasoning、message、call_a、call_b、output_a、output_b）让整个
+// 回合合并为一条 assistant 消息。
+func TestBuildResponsesInputParallelCalls(t *testing.T) {
+	items := []protocol.ResponseItem{
+		protocol.NewUserMessage("check both files"),
+		protocol.NewReasoning("need two reads"),
+		protocol.NewAssistantMessage("reading both"),
+		protocol.NewFunctionCall("call_a", "shell", `{"command":["type","a"]}`),
+		protocol.NewFunctionCallOutput("call_a", "content-a"),
+		protocol.NewFunctionCall("call_b", "shell", `{"command":["type","b"]}`),
+		protocol.NewFunctionCallOutput("call_b", "content-b"),
+	}
+
+	got := buildResponsesInput(items)
+	if len(got) != 7 {
+		t.Fatalf("expected 7 items, got %d: %+v", len(got), got)
+	}
+
+	wantTypes := []string{
+		"message", "reasoning", "message",
+		"function_call", "function_call",
+		"function_call_output", "function_call_output",
+	}
+	wantCallIDs := []string{"", "", "", "call_a", "call_b", "call_a", "call_b"}
+	for i, want := range wantTypes {
+		if got[i].Type != want {
+			t.Fatalf("item %d type = %q, want %q (full: %+v)", i, got[i].Type, want, got)
+		}
+		if id := wantCallIDs[i]; id != "" && got[i].CallID != id {
+			t.Errorf("item %d call_id = %q, want %q", i, got[i].CallID, id)
+		}
 	}
 }
 

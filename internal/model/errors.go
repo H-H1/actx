@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,6 +51,53 @@ type AuthError struct {
 // RateLimitError.
 // Unwrap 允许 errors.As 从 RateLimitError 中恢复包装的 *APIError。
 func (e *RateLimitError) Unwrap() error { return e.APIError }
+
+// Sentinel error kinds for mid-stream failures delivered via the
+// response.failed SSE event. Unlike HTTP-status errors there is no status
+// code to branch on, so the message text is classified into these kinds;
+// callers can use errors.Is to react (e.g. abort on context window
+// exceeded, retry on server overloaded).
+// 通过 response.failed SSE 事件传递的流内失败错误的哨兵类别。
+// 与 HTTP 状态码错误不同，这里没有状态码可供分支，因此将消息文本
+// 归类为这些类别；调用者可用 errors.Is 做出反应（如上下文超限时中止、
+// 服务器超载时重试）。
+var (
+	// ErrContextWindowExceeded marks prompts larger than the model context.
+	// ErrContextWindowExceeded 标记提示超过模型上下文窗口。
+	ErrContextWindowExceeded = errors.New("context window exceeded")
+	// ErrQuotaExceeded marks exhausted balance or quota.
+	// ErrQuotaExceeded 标记余额或配额耗尽。
+	ErrQuotaExceeded = errors.New("quota exceeded")
+	// ErrServerOverloaded marks transient server capacity errors.
+	// ErrServerOverloaded 标记瞬时的服务器容量错误。
+	ErrServerOverloaded = errors.New("server overloaded")
+)
+
+// classifyResponsesError maps a response.failed message to a typed error:
+// one of the sentinel kinds above, a *RateLimitError for rate limiting, or
+// a plain *APIError carrying the original message. Mirrors the Rust
+// implementation's failure taxonomy.
+// classifyResponsesError 把 response.failed 的消息映射为类型化错误：
+// 上述哨兵类别之一、速率限制的 *RateLimitError，或携带原始消息的纯
+// *APIError。与 Rust 实现的失败分类保持一致。
+func classifyResponsesError(msg string) error {
+	apiErr := &APIError{Message: msg, Type: "responses_stream_error"}
+	m := strings.ToLower(msg)
+	switch {
+	case strings.Contains(m, "context length") || strings.Contains(m, "context window") ||
+		strings.Contains(m, "maximum context") || strings.Contains(m, "too many tokens"):
+		return fmt.Errorf("%w: %s", ErrContextWindowExceeded, msg)
+	case strings.Contains(m, "quota") || strings.Contains(m, "balance") ||
+		strings.Contains(m, "insufficient"):
+		return fmt.Errorf("%w: %s", ErrQuotaExceeded, msg)
+	case strings.Contains(m, "overloaded") || strings.Contains(m, "at capacity"):
+		return fmt.Errorf("%w: %s", ErrServerOverloaded, msg)
+	case strings.Contains(m, "rate limit"):
+		return &RateLimitError{APIError: apiErr}
+	default:
+		return apiErr
+	}
+}
 
 // Unwrap allows errors.As to recover the wrapped *APIError from an AuthError.
 // Unwrap 允许 errors.As 从 AuthError 中恢复包装的 *APIError。

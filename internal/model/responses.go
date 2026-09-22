@@ -119,6 +119,10 @@ type responsesStreamEvent struct {
 	// Delta carries incremental text for "*delta" events.
 	// Delta 为 "*delta" 事件携带增量文本。
 	Delta string `json:"delta"`
+	// ItemID / CallID attribute delta events to their output item.
+	// ItemID / CallID 把增量事件归属到其输出项。
+	ItemID string `json:"item_id"`
+	CallID string `json:"call_id"`
 	// Item holds the completed output item for output_item.done events.
 	// Item 为 output_item.done 事件携带完成的输出项。
 	Item *responsesOutputItem `json:"item"`
@@ -138,6 +142,18 @@ type responsesOutput struct {
 	// Error describes the failure for response.failed events.
 	// Error 描述 response.failed 事件的失败原因。
 	Error *responsesError `json:"error"`
+	// IncompleteDetails explains why response.incomplete was truncated
+	// (e.g. "max_output_tokens").
+	// IncompleteDetails 解释 response.incomplete 被截断的原因
+	// （例如 "max_output_tokens"）。
+	IncompleteDetails *responsesIncompleteDetails `json:"incomplete_details"`
+}
+
+// responsesIncompleteDetails carries the truncation reason on
+// response.incomplete events.
+// responsesIncompleteDetails 在 response.incomplete 事件上携带截断原因。
+type responsesIncompleteDetails struct {
+	Reason string `json:"reason"`
 }
 
 // responsesError is the error detail on response.failed events.
@@ -251,6 +267,51 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 		defer resp.Body.Close()
 		defer close(events)
 
+		// The SSE event trail aggregates wire events into self-contained
+		// lines (each prefixed with [type]) returned by trail() and carried
+		// on the emitted ResponseEvent via its Trail field. The consumer
+		// (processStream) writes them single-threaded, so trail lines and
+		// item log lines interleave in exact event order. Consecutive
+		// same-type deltas aggregate into one line until a newline, a type
+		// switch, an item-level event, or a length cap flushes it.
+		// SSE 事件轨迹把线上事件聚合成自包含的行（每行带 [type] 前缀），
+		// 由 trail() 返回并随发出的 ResponseEvent 的 Trail 字段传递。
+		// 消费方（processStream）单线程写入，因此轨迹行与条目日志行
+		// 按真实事件顺序交错。同 type 的连续增量聚合到同一行，直到
+		// 遇到换行、type 切换、条目级事件或长度上限时才冲刷成行。
+		const trailLineMax = 160
+		var (
+			trailType string
+			trailBuf  strings.Builder
+		)
+		trailLine := func(evType, text string) string {
+			if text == "" {
+				return "[" + evType + "]\n"
+			}
+			return "[" + evType + "] " + text + "\n"
+		}
+		flushTrail := func() string {
+			if trailBuf.Len() == 0 {
+				return ""
+			}
+			line := trailLine(trailType, trailBuf.String())
+			trailBuf.Reset()
+			return line
+		}
+		trail := func(evType, text string, forceBreak bool) string {
+			var out string
+			if evType != trailType || forceBreak {
+				out = flushTrail()
+				trailType = evType
+			}
+			trailBuf.WriteString(text)
+			if forceBreak || strings.ContainsRune(text, '\n') || trailBuf.Len() >= trailLineMax {
+				out += trailLine(evType, trailBuf.String())
+				trailBuf.Reset()
+			}
+			return out
+		}
+
 		for scanner.Next() {
 			data := scanner.Data()
 			if data == "" {
@@ -265,7 +326,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 			switch ev.Type {
 			case "response.output_text.delta":
 				if ev.Delta != "" {
-					if !c.emit(ctx, events, ResponseEvent{Type: EventOutputTextDelta, DeltaText: ev.Delta}) {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventOutputTextDelta, DeltaText: ev.Delta, ItemID: ev.ItemID, Trail: trail(ev.Type, ev.Delta, false)}) {
 						return
 					}
 				}
@@ -278,7 +339,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				// OpenAI 使用 reasoning_summary_text.delta。两者都映射到
 				// 内部的 EventReasoningDelta 事件。
 				if ev.Delta != "" {
-					if !c.emit(ctx, events, ResponseEvent{Type: EventReasoningDelta, DeltaReasoning: ev.Delta}) {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventReasoningDelta, DeltaReasoning: ev.Delta, ItemID: ev.ItemID, Trail: trail(ev.Type, ev.Delta, false)}) {
 						return
 					}
 				}
@@ -287,20 +348,18 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				if ev.Item == nil {
 					continue
 				}
+				itemTrail := trail(ev.Type, ev.Item.traceLabel(), true)
 				if item, ok := ev.Item.toResponseItem(); ok {
-					if !c.emit(ctx, events, ResponseEvent{Type: EventOutputItemDone, Item: &item}) {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventOutputItemDone, Item: &item, Trail: itemTrail}) {
 						return
 					}
 				}
 
-			case "response.completed", "response.incomplete":
-				// Terminal events carry usage; incomplete means the response
-				// was truncated (e.g. max_output_tokens) but any output items
-				// already delivered remain valid.
-				// 终止事件携带用量；incomplete 表示响应被截断（例如达到
-				// max_output_tokens），但已交付的输出项仍然有效。
+			case "response.completed":
+				// Terminal event carries usage.
+				// 终止事件携带用量。
 				if ev.Response != nil && ev.Response.Usage != nil {
-					if !c.emit(ctx, events, ResponseEvent{Type: EventCompleted, Usage: ev.Response.Usage}) {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventCompleted, Usage: ev.Response.Usage, Trail: trail(ev.Type, "", true)}) {
 						return
 					}
 				}
@@ -313,13 +372,48 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				// 在此停止读取，而不是等待 EOF 或 HTTP 客户端超时。
 				return
 
+			case "response.incomplete":
+				// The response was truncated (e.g. max_output_tokens) but
+				// already-delivered output items remain valid: still emit
+				// usage, then surface the truncation reason as a typed
+				// EventIncomplete instead of silently treating it as a
+				// normal completion.
+				// 响应被截断（如达到 max_output_tokens），但已交付的输出项
+				// 仍然有效：仍然发出用量，然后以类型化的 EventIncomplete
+				// 呈现截断原因，而不是静默地当作正常完成。
+				reason := "unknown"
+				if ev.Response != nil && ev.Response.IncompleteDetails != nil && ev.Response.IncompleteDetails.Reason != "" {
+					reason = ev.Response.IncompleteDetails.Reason
+				}
+				incTrail := trail(ev.Type, "reason: "+reason, true)
+				if ev.Response != nil && ev.Response.Usage != nil {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventCompleted, Usage: ev.Response.Usage}) {
+						return
+					}
+				}
+				if !c.emit(ctx, events, ResponseEvent{
+					Type:  EventIncomplete,
+					Err:   fmt.Errorf("incomplete response, reason: %s", reason),
+					Trail: incTrail,
+				}) {
+					return
+				}
+				return
+
 			case "response.failed":
+				// Classify the failure message into a typed error (context
+				// window / quota / overloaded / rate limit) and emit it as
+				// EventFailed with Err — the failure must NOT be disguised
+				// as an assistant message item, which would make it look
+				// like normal model output downstream.
+				// 把失败消息分类为类型化错误（上下文窗口/配额/超载/限速）
+				// 并以携带 Err 的 EventFailed 发出——失败绝不能伪装成
+				// assistant 消息项，否则下游会把它当成模型的正常输出。
 				msg := "responses stream failed"
 				if ev.Response != nil && ev.Response.Error != nil && ev.Response.Error.Message != "" {
 					msg = ev.Response.Error.Message
 				}
-				item := protocol.NewAssistantMessage(msg)
-				if !c.emit(ctx, events, ResponseEvent{Type: EventFailed, Item: &item}) {
+				if !c.emit(ctx, events, ResponseEvent{Type: EventFailed, Err: classifyResponsesError(msg), Trail: trail(ev.Type, msg, true)}) {
 					return
 				}
 				// response.failed is also terminal; stop reading.
@@ -327,9 +421,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				return
 
 			case "error":
-				msg := "responses stream error"
-				item := protocol.NewAssistantMessage(msg)
-				if !c.emit(ctx, events, ResponseEvent{Type: EventError, Item: &item}) {
+				if !c.emit(ctx, events, ResponseEvent{Type: EventError, Err: fmt.Errorf("responses stream error"), Trail: trail(ev.Type, "", true)}) {
 					return
 				}
 			}
@@ -356,6 +448,43 @@ func (c *ModelClient) emit(ctx context.Context, ch chan<- ResponseEvent, ev Resp
 	case ch <- ev:
 		return true
 	}
+}
+
+// traceLabel returns a short one-line label describing the item for the
+// SSE event trail (e.g. "message: 你好…", "function_call shell (call_00_x…)",
+// "reasoning (512 chars)").
+// traceLabel 返回描述该项的单行短标签，用于 SSE 事件轨迹
+// （例如 "message: 你好…"、"function_call shell (call_00_x…)"、
+// "reasoning (512 chars)"）。
+func (item *responsesOutputItem) traceLabel() string {
+	const maxText = 40
+	clip := func(s string) string {
+		r := []rune(s)
+		if len(r) > maxText {
+			return string(r[:maxText]) + "…"
+		}
+		return s
+	}
+	switch item.Type {
+	case "message":
+		var b strings.Builder
+		for _, blk := range item.Content {
+			b.WriteString(blk.Text)
+		}
+		return "message: " + clip(b.String())
+	case "function_call":
+		return "function_call " + item.Name + " (" + clip(item.CallID) + ")"
+	case "reasoning":
+		n := 0
+		for _, blk := range item.Summary {
+			n += len([]rune(blk.Text))
+		}
+		for _, blk := range item.Content {
+			n += len([]rune(blk.Text))
+		}
+		return fmt.Sprintf("reasoning (%d chars)", n)
+	}
+	return item.Type
 }
 
 // toResponseItem converts a /responses output item into a protocol
@@ -483,6 +612,52 @@ func buildResponsesInput(items []protocol.ResponseItem) []responsesItem {
 			})
 		}
 	}
+	return regroupParallelCalls(out)
+}
+
+// regroupParallelCalls reorders interleaved call/output sequences so that all
+// calls of one assistant turn come first, followed by their outputs.
+// DeepSeek's Responses API merges a function_call into the adjacent assistant
+// message; with parallel tool calls our context stores them interleaved
+// (call_a, output_a, call_b, output_b — outputs are appended when each tool
+// finishes during the stream), which leaves call_b stranded after a tool
+// message with no reasoning in front, failing the thinking-mode validation
+// ("The reasoning_text in the thinking mode must be passed back to the API").
+// Grouping calls before outputs restores the standard parallel-tool-call shape
+// (reasoning, message, call_a, call_b, output_a, output_b) so the whole turn
+// merges into one assistant message. The call_id pairing keeps semantics.
+// regroupParallelCalls 把交错的 call/output 序列重排为同一回合的所有
+// call 在前、output 统一在后。DeepSeek 的 Responses API 会把 function_call
+// 合并进相邻的 assistant 消息；并行工具调用时本地上下文按流中执行顺序
+// 交错存储（call_a、output_a、call_b、output_b——每个工具在流中执行完就
+// 追加其输出），导致 call_b 前面是 tool 消息而没有 reasoning，触发思维链
+// 校验失败（"The reasoning_text in the thinking mode must be passed back"）。
+// 分组重排恢复并行工具调用的标准形态（reasoning、message、call_a、
+// call_b、output_a、output_b），整个回合得以合并为一条 assistant 消息。
+// call_id 配对保证语义不变。
+func regroupParallelCalls(items []responsesItem) []responsesItem {
+	out := make([]responsesItem, 0, len(items))
+	var calls, outputs []responsesItem
+	flush := func() {
+		out = append(out, calls...)
+		out = append(out, outputs...)
+		calls, outputs = nil, nil
+	}
+	for _, it := range items {
+		switch it.Type {
+		case "function_call", "custom_tool_call":
+			calls = append(calls, it)
+		case "function_call_output", "custom_tool_call_output":
+			outputs = append(outputs, it)
+		default:
+			// Any other item (reasoning / message / user message) ends the
+			// current call-output group.
+			// 其他项（reasoning / message / user 消息）结束当前分组。
+			flush()
+			out = append(out, it)
+		}
+	}
+	flush()
 	return out
 }
 

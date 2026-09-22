@@ -166,6 +166,26 @@ func (l *TurnLogger) LogError(errMsg string) {
 	l.writeSection("error", errMsg)
 }
 
+// LogSSE appends a raw SSE event-trail fragment as-is (no timestamp, no
+// role prefix): the model layer aggregates the trail itself — one line per
+// event type prefixed with [type], consecutive same-type deltas appended
+// inline. Fragments may or may not end with a newline; the caller controls
+// line breaks.
+// LogSSE 原样追加原始 SSE 事件轨迹片段（无时间戳、无角色前缀）：
+// 轨迹的聚合由模型层完成——每种事件类型一行、以 [type] 开头，
+// 同 type 的连续增量行内追加。片段末尾是否换行由调用方控制。
+func (l *TurnLogger) LogSSE(fragment string) {
+	if l == nil || fragment == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file == nil {
+		return
+	}
+	_, _ = l.file.WriteString(fragment)
+}
+
 // LogTurnStart writes a separator block marking the beginning of a turn.
 // The banner carries the submission ID alongside the turn ID: the log file
 // is shared by the whole thread, so the submission ID is what links a turn

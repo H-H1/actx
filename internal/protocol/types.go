@@ -164,21 +164,65 @@ type Op struct {
 type OpType string
 
 const (
-	OpUserInput                OpType = "user_input"
-	OpInterrupt                OpType = "interrupt"
-	OpShutdown                 OpType = "shutdown"
-	OpExecApproval             OpType = "exec_approval"
-	OpPatchApproval            OpType = "patch_approval"
-	OpCompact                  OpType = "compact"
-	OpRefreshMcpServers        OpType = "refresh_mcp_servers"
-	OpReloadUserConfig         OpType = "reload_user_config"
-	OpThreadRollback           OpType = "thread_rollback"
+	// OpUserInput 用户输入：用户发送一条普通消息/指令给 agent，是最常见的对话输入。
+	// OpUserInput User input: the user sends a normal message/instruction to the agent; the most common form of conversational input.
+	OpUserInput OpType = "user_input"
+
+	// OpInterrupt 中断：用户打断当前正在执行的任务（类似 Ctrl+C），让 agent 停止当前这轮生成或执行。
+	// OpInterrupt Interrupt: the user interrupts the currently running task (like Ctrl+C), stopping the agent's current generation or execution.
+	OpInterrupt OpType = "interrupt"
+
+	// OpShutdown 关闭：用户要求退出/关闭当前会话或整个程序。
+	// OpShutdown Shutdown: the user requests to exit/close the current session or the whole program.
+	OpShutdown OpType = "shutdown"
+
+	// OpExecApproval 执行审批：agent 请求运行某条命令，用户批准或拒绝该命令的执行。
+	// OpExecApproval Execution approval: the agent requests to run a command, and the user approves or rejects its execution.
+	OpExecApproval OpType = "exec_approval"
+
+	// OpPatchApproval 补丁审批：agent 请求应用代码改动（patch/diff），用户批准或拒绝。
+	// OpPatchApproval Patch approval: the agent requests to apply a code change (patch/diff), and the user approves or rejects it.
+	OpPatchApproval OpType = "patch_approval"
+
+	// OpCompact 压缩上下文：用户触发将对话历史做摘要压缩，以节省上下文窗口（手动 compact）。
+	// OpCompact Compact context: the user triggers summarizing/compacting the conversation history to save context window space (manual compact).
+	OpCompact OpType = "compact"
+
+	// OpRefreshMcpServers 刷新 MCP 服务器：让系统重新加载/连接 MCP（Model Context Protocol）服务器列表。
+	// OpRefreshMcpServers Refresh MCP servers: makes the system reload/reconnect the list of MCP (Model Context Protocol) servers.
+	OpRefreshMcpServers OpType = "refresh_mcp_servers"
+
+	// OpReloadUserConfig 重载用户配置：用户修改配置后，让程序重新读取用户配置文件。
+	// OpReloadUserConfig Reload user config: after the user edits the config, makes the program re-read the user configuration file.
+	OpReloadUserConfig OpType = "reload_user_config"
+
+	// OpThreadRollback 会话回滚：把当前对话线程回退到之前的某个检查点/轮次。
+	// OpThreadRollback Thread rollback: rolls the current conversation thread back to a previous checkpoint/turn.
+	OpThreadRollback OpType = "thread_rollback"
+
+	// OpCleanBackgroundTerminals 清理后台终端：清理 agent 启动的后台 shell/终端进程。
+	// OpCleanBackgroundTerminals Clean background terminals: cleans up background shell/terminal processes started by the agent.
 	OpCleanBackgroundTerminals OpType = "clean_background_terminals"
-	OpRunUserShellCommand      OpType = "run_user_shell_command"
-	OpResolveElicitation       OpType = "resolve_elicitation"
-	OpUserInputAnswer          OpType = "user_input_answer"
-	OpRequestPermissionsResp   OpType = "request_permissions_response"
-	OpDynamicToolResponse      OpType = "dynamic_tool_response"
+
+	// OpRunUserShellCommand 运行用户 Shell 命令：用户直接让系统执行一条 shell 命令，绕过 agent 推理。
+	// OpRunUserShellCommand Run user shell command: the user directly asks the system to run a shell command, bypassing agent reasoning.
+	OpRunUserShellCommand OpType = "run_user_shell_command"
+
+	// OpResolveElicitation 回应信息征询：agent 通过 elicitation 机制向用户提问/索取信息，用户给出回应。
+	// OpResolveElicitation Resolve elicitation: the agent asks the user for information via the elicitation mechanism, and the user responds.
+	OpResolveElicitation OpType = "resolve_elicitation"
+
+	// OpUserInputAnswer 回答用户输入请求：针对 agent 发起的某个"用户输入请求"给出答案（表单式/结构化回答）。
+	// OpUserInputAnswer Answer user-input request: provides an answer (form-based/structured) to a "user input request" raised by the agent.
+	OpUserInputAnswer OpType = "user_input_answer"
+
+	// OpRequestPermissionsResp 权限请求响应：对 agent 发起的权限申请（如访问文件、网络等）做出批准/拒绝的响应。
+	// OpRequestPermissionsResp Permissions request response: approves or rejects a permission request raised by the agent (e.g., file or network access).
+	OpRequestPermissionsResp OpType = "request_permissions_response"
+
+	// OpDynamicToolResponse 动态工具响应：对动态注册/调用的工具（dynamic tool）返回执行结果或响应。
+	// OpDynamicToolResponse Dynamic tool response: returns the execution result or response for a dynamically registered/invoked tool.
+	OpDynamicToolResponse OpType = "dynamic_tool_response"
 )
 
 // NewUserInputOp creates a user input operation.
