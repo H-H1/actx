@@ -1,0 +1,250 @@
+{
+	"info": {
+		"_postman_id": "a6f1e2c4-actx-web-api",
+		"name": "ACTX Web API",
+		"description": "ACTX 代理 HTTP SSE 服务器的全部接口。\n\n使用顺序：先调用 Create Session，session_id 会自动存入集合变量 {{sessionId}}，后续请求直接使用。\n\n- 默认地址 http://127.0.0.1:8088，可用集合变量 baseUrl 覆盖\n- 所有会话参数（model/cwd/policy 等）均支持优雅降级：非法值或空白值记警告后回落默认值，会话总能创建",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://127.0.0.1:8088",
+			"type": "string"
+		},
+		{
+			"key": "sessionId",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Health",
+			"request": {
+				"method": "GET",
+				"url": {
+					"raw": "{{baseUrl}}/health",
+					"host": ["{{baseUrl}}"],
+					"path": ["health"]
+				},
+				"description": "健康检查。返回 200 表示服务器存活。"
+			}
+		},
+		{
+			"name": "List Sessions",
+			"request": {
+				"method": "GET",
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions"]
+				},
+				"description": "列出当前所有会话及其状态。"
+			}
+		},
+		{
+			"name": "Create Session",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"const json = pm.response.json();",
+							"if (json.session_id) {",
+							"    pm.collectionVariables.set('sessionId', json.session_id);",
+							"    console.log('sessionId =', json.session_id);",
+							"}"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"model\": \"deepseek-flash\",\n    \"instructions\": \"你是一个帮助写代码的助手\",\n    \"cwd\": \"D:\\\\0GOSDK\\\\actx\",\n    \"approval_policy\": \"on-request\",\n    \"sandbox_policy\": \"workspace-write\",\n    \"tools_mode\": \"api\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions"]
+				},
+				"description": "创建会话，返回 201 与 session_id（自动写入集合变量）。\n\n所有参数均可省略，均可优雅降级：\n- model：覆盖模型名；空白/非法回落配置默认\n- instructions：追加用户指令\n- cwd：工作目录，必须为已存在目录，否则回落服务器目录\n- approval_policy：untrusted | on-request | on-failure | never\n- sandbox_policy：read-only | workspace-write | danger-full-access\n- tools_mode：api | prompt\n\n测试降级可传 {\"approval_policy\":\"bogus\"}，会 201 并回落默认值。"
+			}
+		},
+		{
+			"name": "Get Session",
+			"request": {
+				"method": "GET",
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions/{{sessionId}}",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions", "{{sessionId}}"]
+				},
+				"description": "查询单个会话详情（模型、策略、cwd、运行状态等）。"
+			}
+		},
+		{
+			"name": "Delete Session",
+			"request": {
+				"method": "DELETE",
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions/{{sessionId}}",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions", "{{sessionId}}"]
+				},
+				"description": "关闭并删除会话，释放其资源。"
+			}
+		},
+		{
+			"name": "Events (SSE)",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Accept",
+						"value": "text/event-stream"
+					}
+				],
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions/{{sessionId}}/events",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions", "{{sessionId}}", "events"]
+				},
+				"description": "SSE 事件长连接，持续推送会话事件（agent 消息、token 用量、错误等）。\n\n注意：这是长连接，Postman 会一直挂起等待数据——先在另一个标签页发送 Message，再回来观察事件流。浏览器/前端请使用 EventSource。"
+			}
+		},
+		{
+			"name": "Send Message",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json; charset=utf-8"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"message\": \"用一句话介绍 Go 语言\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions/{{sessionId}}/message",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions", "{{sessionId}}", "message"]
+				},
+				"description": "发送用户消息，触发一轮 agent 运行，返回 submission_id。\n\n简单用法只传 message。高级用法传 items（完整 ResponseItem 列表，优先于 message）：\n\n{\n    \"items\": [\n        {\"type\": \"message\", \"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"你好\"}]}\n    ]\n}\n\nmessage 与 items 均为空返回 400。事件结果通过 Events (SSE) 接收。"
+			}
+		},
+		{
+			"name": "Interrupt",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions/{{sessionId}}/interrupt",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions", "{{sessionId}}", "interrupt"]
+				},
+				"description": "中止当前正在运行的轮次。无需请求体。"
+			}
+		},
+		{
+			"name": "Approval",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"call_id\": \"call_xxxxxxxx\",\n    \"approved\": true,\n    \"feedback\": \"\",\n    \"kind\": \"\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions/{{sessionId}}/approval",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions", "{{sessionId}}", "approval"]
+				},
+				"description": "响应审批请求（approval_policy=on-request/untrusted 时，工具调用会挂起等待本接口）。\n\n- call_id：审批事件里带出的调用 ID（必填）\n- approved：true 放行 / false 拒绝\n- feedback：拒绝时可带反馈，会作为用户消息发回模型\n- kind：留空为命令执行审批；\"patch\" 为补丁审批"
+			}
+		},
+		{
+			"name": "Compact",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"full\": false\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/sessions/{{sessionId}}/compact",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "sessions", "{{sessionId}}", "compact"]
+				},
+				"description": "压缩会话上下文，释放 token 窗口。\n- full: false → 压缩较早的历史\n- full: true → 全量压缩（丢弃更早上下文）"
+			}
+		},
+		{
+			"name": "Index (测试页面)",
+			"request": {
+				"method": "GET",
+				"url": {
+					"raw": "{{baseUrl}}/",
+					"host": ["{{baseUrl}}"],
+					"path": [""]
+				},
+				"description": "内嵌 Web 测试页面，浏览器直接打开可交互试用。"
+			}
+		}
+	]
+}
