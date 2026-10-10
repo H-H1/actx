@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -165,10 +166,13 @@ func (t *ShellTool) Handle(ctx context.Context, inv tools.ToolInvocation) (tools
 
 	// Truncate output if too large.
 	// 如果输出太大则截断。
-	// On Windows cmd.exe emits GBK-encoded text; convert to UTF-8 so the
-	// model and logs see proper Chinese characters instead of mojibake.
-	// Windows cmd.exe 输出 GBK 编码文本；转换为 UTF-8，
-	// 避免模型与日志看到乱码。
+	// On Windows the legacy shell emits GBK-encoded text; convert to UTF-8
+	// so the model and logs see proper Chinese characters instead of
+	// mojibake. PowerShell output is forced to UTF-8 via a command prefix,
+	// so this is a safety net for cmd.exe fallback and misbehaving tools.
+	// Windows 上旧 shell 会输出 GBK 编码文本；转换为 UTF-8，避免模型与
+	// 日志看到乱码。PowerShell 的输出已通过命令前缀强制为 UTF-8，
+	// 此处是针对 cmd.exe 兜底路径与不规范工具的安全网。
 	stdoutStr := truncateOutput(decodeShellOutput(stdout.Bytes()), 30000)
 	stderrStr := truncateOutput(decodeShellOutput(stderr.Bytes()), 10000)
 
@@ -182,12 +186,13 @@ func (t *ShellTool) Handle(ctx context.Context, inv tools.ToolInvocation) (tools
 
 // decodeShellOutput converts shell output bytes to a UTF-8 string.
 // decodeShellOutput 将 shell 输出字节转换为 UTF-8 字符串。
-// On Windows, cmd.exe emits GBK (CP936) for the system locale; a plain
-// string(b) cast produces mojibake for Chinese text. If the bytes are not
-// valid UTF-8, try GBK decoding and fall back to the raw bytes on failure.
-// 在 Windows 上 cmd.exe 按系统区域设置输出 GBK（CP936）；直接 string(b)
-// 转换会让中文变乱码。如果字节不是有效的 UTF-8，先尝试 GBK 解码，
-// 失败则回退为原始字节。
+// On Windows, cmd.exe and Windows PowerShell 5.1 emit GBK (CP936) for the
+// system locale when stdout is redirected; a plain string(b) cast produces
+// mojibake for Chinese text. If the bytes are not valid UTF-8, try GBK
+// decoding and fall back to the raw bytes on failure.
+// 在 Windows 上，stdout 被重定向时 cmd.exe 与 Windows PowerShell 5.1 按
+// 系统区域设置输出 GBK（CP936）；直接 string(b) 转换会让中文变乱码。
+// 如果字节不是有效的 UTF-8，先尝试 GBK 解码，失败则回退为原始字节。
 func decodeShellOutput(b []byte) string {
 	if utf8.Valid(b) {
 		return string(b)
@@ -201,18 +206,25 @@ func decodeShellOutput(b []byte) string {
 // platformInstructions returns OS-specific shell guidance appended to the
 // system prompt so the model emits commands the host shell can actually run
 // (e.g. without it, models often send Unix commands like "pwd" or "ls" that
-// fail on Windows cmd.exe).
+// fail on Windows). Windows guidance mirrors codex: the model is steered to
+// native PowerShell syntax instead of POSIX commands, because the execution
+// shell on Windows is resolved to PowerShell first (cmd.exe only as last
+// resort).
 // platformInstructions 返回追加到系统提示词的操作系统专属 shell 指引，
-// 让模型生成宿主 shell 真正能执行的命令（否则模型常发出 pwd/ls 等
-// 在 Windows cmd.exe 中会失败的 Unix 命令）。
+// 让模型生成宿主 shell 真正能执行的命令（否则模型常发出 pwd/ls 等在
+// Windows 上会失败的 Unix 命令）。Windows 指引与 codex 一致：引导模型
+// 使用原生 PowerShell 语法而非 POSIX 命令，因为 Windows 上的执行 shell
+// 优先解析为 PowerShell（cmd.exe 仅作最后兜底）。
 func platformInstructions() string {
 	if runtime.GOOS == "windows" {
 		return `# Platform
 
-You are running on Windows. The shell tool executes commands via cmd.exe.
-- Use Windows commands: dir (not ls), type (not cat), cd (not pwd), copy/move/del (not cp/mv/rm), findstr (not grep).
-- Use double quotes only; single quotes are literal characters in cmd.exe.
-- No Unix shell features: no $() substitution, no backticks, no 2>/dev/null (use 2>nul).
+You are running on Windows. The shell tool executes commands via PowerShell.
+- Use PowerShell cmdlets and syntax: Get-ChildItem (ls/dir), Get-Content (cat/type), Remove-Item (rm/del), Copy-Item (cp/copy), Move-Item (mv/move), New-Item (mkdir/touch).
+- Prefer -LiteralPath on file cmdlets when paths may contain special characters.
+- Do not mix shells: never pipe PowerShell output into cmd.exe-only tools (cmd /c) for destructive operations.
+- $() subexpressions, pipes and backtick line continuation work; use double quotes for string interpolation, single quotes for literal strings.
+- Start background/GUI processes with Start-Process -WindowStyle Hidden.
 - Path separator is backslash (\).`
 	}
 	return `# Platform
@@ -220,14 +232,66 @@ You are running on Windows. The shell tool executes commands via cmd.exe.
 You are running on a Unix-like system. The shell tool executes commands via sh.`
 }
 
+// powershellUTF8Prefix forces UTF-8 output decoding for the PowerShell
+// process. Windows PowerShell 5.1 emits native/cmdlet output in the system
+// ANSI codepage (GBK on Chinese Windows) when stdout is redirected, producing
+// mojibake; setting [Console]::OutputEncoding makes both cmdlet output and
+// native command output UTF-8. Wrapped in try/catch because the setter
+// throws "handle is invalid" in console-less hosts.
+// powershellUTF8Prefix 强制 PowerShell 进程以 UTF-8 输出。stdout 被重定向时
+// Windows PowerShell 5.1 按系统 ANSI 代码页（中文 Windows 为 GBK）输出
+// 原生命令与 cmdlet 结果，导致中文乱码；设置 [Console]::OutputEncoding 后
+// 二者均为 UTF-8。用 try/catch 包裹是因为在无控制台宿主中该属性 setter
+// 会抛出 "handle is invalid"。
+const powershellUTF8Prefix = `try{[Console]::OutputEncoding=[System.Text.Encoding]::UTF8}catch{}; `
+
+// windowsShell resolves the Windows execution shell once per process:
+// PowerShell 7 (pwsh) first, then Windows PowerShell 5.1, then cmd.exe as
+// the last resort. This mirrors codex's shell resolution — Windows has no
+// POSIX login shell, so the modern shell is preferred and cmd.exe is only
+// a fallback. An empty result means "use cmd.exe".
+// windowsShell 每进程解析一次 Windows 执行 shell：优先 PowerShell 7（pwsh），
+// 其次 Windows PowerShell 5.1，最后以 cmd.exe 兜底。这与 codex 的 shell
+// 解析一致——Windows 没有 POSIX 登录 shell，因此优先现代 shell，
+// cmd.exe 仅作回退。结果为空表示"使用 cmd.exe"。
+var windowsShell = sync.OnceValue(func() string {
+	if path, err := exec.LookPath("pwsh.exe"); err == nil {
+		return path
+	}
+	// pwsh not on PATH: check the standard PowerShell 7 install locations.
+	// PATH 上没有 pwsh：检查标准 PowerShell 7 安装位置。
+	for _, p := range []string{
+		`C:\Program Files\PowerShell\7\pwsh.exe`,
+		`C:\Program Files\PowerShell\6\pwsh.exe`,
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	if path, err := exec.LookPath("powershell.exe"); err == nil {
+		return path
+	}
+	const systemPowerShell = `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+	if _, err := os.Stat(systemPowerShell); err == nil {
+		return systemPowerShell
+	}
+	return ""
+})
+
 // prepareCommand converts the command array into a shell invocation.
 // prepareCommand 将命令数组转换为 shell 调用。
-// On Windows it uses cmd.exe /c, on Unix it uses sh -c.
+// On Windows it uses PowerShell -Command (resolved by windowsShell, cmd.exe
+// /c only as last resort); on Unix it uses sh -c.
+// Windows 上使用 PowerShell -Command（由 windowsShell 解析，仅作最后兜底时
+// 用 cmd.exe /c）；Unix 上使用 sh -c。
 func prepareCommand(command []string) (string, []string) {
 	// Join the command array into a single string for shell execution.
 	// 将命令数组连接为单个字符串以供 shell 执行。
 	cmdStr := joinCommand(command)
 	if runtime.GOOS == "windows" {
+		if ps := windowsShell(); ps != "" {
+			return ps, []string{"-NoProfile", "-NonInteractive", "-Command", powershellUTF8Prefix + cmdStr}
+		}
 		return "cmd.exe", []string{"/c", cmdStr}
 	}
 	return "sh", []string{"-c", cmdStr}

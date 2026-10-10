@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -238,6 +240,29 @@ func (l *TurnLogger) LogRequest(p model.Prompt) {
 	if instrChanged && instr != "" {
 		l.writeSection("instructions", instr)
 	}
+}
+
+// LogRequestBody logs the exact JSON body sent to the model API, pretty
+// printed for readability. It is wired via ModelClient.SetRequestTrace and
+// fires on the session goroutine right after LogRequest writes the header,
+// so the body always lands between its "Request #N" header and the first
+// SSE trail line of that request. Unlike writeSection, no truncation is
+// applied: the point is to see precisely what was sent.
+// LogRequestBody 记录发送给模型 API 的确切 JSON 请求体，并格式化输出便于
+// 阅读。它经由 ModelClient.SetRequestTrace 接入，在会话 goroutine 上、
+// LogRequest 写完头行之后立即触发，因此请求体总是位于其 "Request #N"
+// 头行与该请求的首条 SSE 轨迹行之间。与 writeSection 不同，此处不做
+// 截断：目的正是查看实际发送的完整内容。
+func (l *TurnLogger) LogRequestBody(raw []byte) {
+	if l == nil {
+		return
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, raw, "", "  "); err != nil {
+		pretty.Reset()
+		pretty.Write(raw)
+	}
+	l.writeSection("request body", pretty.String())
 }
 
 // turnLogSep is the heavy separator line between turns (60 chars).

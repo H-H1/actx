@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/H-H1/snowflakeid/snowflakeid"
+	"github.com/H-H1/snowflakeid"
 	"github.com/google/uuid"
 )
 

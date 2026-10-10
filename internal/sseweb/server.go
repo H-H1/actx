@@ -6,7 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +60,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /", s.handleIndex)
 	return mux
 }
+
+//
 
 // Close 关闭所有会话（服务器退出时调用）。
 func (s *Server) Close() {
@@ -203,11 +207,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cfg, err := s.deriveConfig(&req)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
+	cfg := s.deriveConfig(&req)
 
 	// 派生代理：Registry 传 nil，Spawn 会注册内置工具
 	// （shell、apply_patch、web_search）。
@@ -232,39 +232,85 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.sessionInfo(sess))
 }
 
-// deriveConfig 克隆基础配置并应用会话级覆盖项。
-func (s *Server) deriveConfig(req *CreateSessionRequest) (*config.Config, error) {
+// deriveConfig 克隆基础配置并应用会话级覆盖项。所有参数均可降级：
+// 空白值与非法值都不返回错误，记一条警告后沿用默认值；应用完覆盖项
+// 后关键字段若仍为空，再兜底到文档化默认值，保证会话总能创建。
+func (s *Server) deriveConfig(req *CreateSessionRequest) *config.Config {
 	cfg := *s.cfg
-	if req.Model != "" {
-		cfg.Model = req.Model
+	if v := strings.TrimSpace(req.Model); v != "" {
+		cfg.Model = v
+	} else if req.Model != "" {
+		s.logger.Warn("blank model override ignored, falling back to default",
+			"fallback", cfg.Model)
 	}
-	if req.Instructions != "" {
-		cfg.UserInstructions = req.Instructions
+	if v := strings.TrimSpace(req.Instructions); v != "" {
+		cfg.UserInstructions = v
+	} else if req.Instructions != "" {
+		s.logger.Warn("blank instructions override ignored")
 	}
-	if req.Cwd != "" {
-		cfg.Cwd = req.Cwd
+	if v := strings.TrimSpace(req.Cwd); v != "" {
+		if st, err := os.Stat(v); err != nil || !st.IsDir() {
+			s.logger.Warn("cwd override ignored, falling back to default",
+				"cwd", v, "fallback", cfg.Cwd)
+		} else {
+			cfg.Cwd = v
+		}
+	} else if req.Cwd != "" {
+		s.logger.Warn("blank cwd override ignored, falling back to default",
+			"fallback", cfg.Cwd)
 	}
-	if req.ApprovalPolicy != "" {
-		p, err := config.ParseApprovalPolicy(req.ApprovalPolicy)
+	if v := strings.TrimSpace(req.ApprovalPolicy); v != "" {
+		p, err := config.ParseApprovalPolicy(v)
 		if err != nil {
-			return nil, err
+			s.logger.Warn("invalid approval_policy, falling back to default",
+				"value", v, "fallback", cfg.ApprovalPolicy.String())
+		} else {
+			cfg.ApprovalPolicy = p
 		}
-		cfg.ApprovalPolicy = p
+	} else if req.ApprovalPolicy != "" {
+		s.logger.Warn("blank approval_policy override ignored, falling back to default",
+			"fallback", cfg.ApprovalPolicy.String())
 	}
-	if req.SandboxPolicy != "" {
-		p, err := config.ParseSandboxPolicy(req.SandboxPolicy)
+	if v := strings.TrimSpace(req.SandboxPolicy); v != "" {
+		p, err := config.ParseSandboxPolicy(v)
 		if err != nil {
-			return nil, err
+			s.logger.Warn("invalid sandbox_policy, falling back to default",
+				"value", v, "fallback", cfg.SandboxPolicy.String())
+		} else {
+			cfg.SandboxPolicy = p
 		}
-		cfg.SandboxPolicy = p
+	} else if req.SandboxPolicy != "" {
+		s.logger.Warn("blank sandbox_policy override ignored, falling back to default",
+			"fallback", cfg.SandboxPolicy.String())
 	}
-	if req.ToolsMode != "" {
-		if req.ToolsMode != "api" && req.ToolsMode != "prompt" {
-			return nil, fmt.Errorf("invalid tools_mode %q (expected api or prompt)", req.ToolsMode)
+	if v := strings.TrimSpace(req.ToolsMode); v != "" {
+		if v != "api" && v != "prompt" {
+			s.logger.Warn("invalid tools_mode, falling back to default",
+				"value", v, "fallback", cfg.ToolsMode)
+		} else {
+			cfg.ToolsMode = v
 		}
-		cfg.ToolsMode = req.ToolsMode
+	} else if req.ToolsMode != "" {
+		s.logger.Warn("blank tools_mode override ignored, falling back to default",
+			"fallback", cfg.ToolsMode)
 	}
-	return &cfg, nil
+
+	// 最终兜底：基础配置本身缺值时回落文档化默认值。
+	if cfg.Model == "" {
+		s.logger.Warn("empty model, falling back to DefaultModel", "fallback", config.DefaultModel)
+		cfg.Model = config.DefaultModel
+	}
+	if cfg.Cwd == "" {
+		if wd, err := os.Getwd(); err == nil {
+			s.logger.Warn("empty cwd, falling back to working directory", "fallback", wd)
+			cfg.Cwd = wd
+		}
+	}
+	if cfg.ToolsMode == "" {
+		s.logger.Warn("empty tools_mode, falling back to api", "fallback", "api")
+		cfg.ToolsMode = "api"
+	}
+	return &cfg
 }
 
 // handleGetSession 处理 GET /api/sessions/{id}。

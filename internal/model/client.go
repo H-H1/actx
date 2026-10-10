@@ -117,6 +117,14 @@ type ModelClient struct {
 	// httpClient performs the underlying HTTP requests with an overall timeout.
 	// httpClient 执行带总体超时的底层 HTTP 请求。
 	httpClient *http.Client
+	// requestTrace, when set, receives every serialized request body right
+	// before it is sent; the agent wires it to the thread log. It is
+	// invoked on the caller's goroutine before any events flow, so its
+	// ordering with the other turnLog writes is guaranteed.
+	// requestTrace 非空时在每个序列化的请求体发送前接收它；由 agent 侧
+	// 接入线程日志。它在调用方 goroutine 上、任何事件流出之前被调用，
+	// 因此与其余 turnLog 写入之间的顺序有保证。
+	requestTrace func(raw []byte)
 }
 
 // NewModelClient creates a ModelClient configured to talk to the given model.
@@ -144,6 +152,14 @@ func NewModelClient(apiKey, model, baseURL string) *ModelClient {
 			Timeout: 120 * time.Second, // 2 minute timeout for the entire request
 		},
 	}
+}
+
+// SetRequestTrace installs a callback that receives the exact JSON body of
+// every outgoing request right before it is sent. Pass nil to disable.
+// SetRequestTrace 安装一个回调，在每个发出请求的 JSON 请求体发送前接收
+// 其确切内容。传 nil 表示禁用。
+func (c *ModelClient) SetRequestTrace(cb func(raw []byte)) {
+	c.requestTrace = cb
 }
 
 // Prompt describes a single request to the Responses API. Input carries the
@@ -430,6 +446,11 @@ func (c *ModelClient) Stream(ctx context.Context, prompt Prompt) (<-chan Respons
 	// 构建端点 URL（去除尾部斜杠避免 "//"）并创建绑定到 ctx 的 POST 请求，
 	// 使取消信号能传播到进行中的 HTTP 调用。
 	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
+	// Same wire-body trace as the Responses path.
+	// 与 Responses 路径相同的线上请求体记录。
+	if c.requestTrace != nil {
+		c.requestTrace(raw)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(raw)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)

@@ -213,6 +213,64 @@ func (c *ModelClient) SetAPIStyle(style string) {
 	c.apiStyle = style
 }
 
+// trailLineMax caps one aggregated trail line so merging cannot produce an
+// unboundedly long single line; output stays readable, parseable, and safe
+// for terminals and log systems.
+// trailLineMax 限制单条聚合轨迹行的长度上限，防止合并逻辑产生无限长的
+// 单行，保证输出可读、可解析、可被终端与日志系统安全承载。
+const trailLineMax = 80
+
+// trailAggregator folds SSE wire events into self-contained trail lines
+// (each prefixed with [type]). Consecutive same-type deltas accumulate in
+// buf until a newline, a type switch, an item-level event (forceBreak), or
+// trailLineMax flushes them into a complete line. One instance per stream,
+// owned by the stream goroutine.
+// trailAggregator 把 SSE 线上事件折叠成自包含的轨迹行（每行带 [type]
+// 前缀）。同 type 的连续增量累积在 buf 中，直到遇到换行、type 切换、
+// 条目级事件（forceBreak）或 trailLineMax 上限才冲刷成完整行。每条流
+// 一个实例，由流 goroutine 独占。
+type trailAggregator struct {
+	evType string
+	buf    strings.Builder
+}
+
+// flush renders and clears the pending buffer.
+// flush 渲染并清空待写缓冲。
+func (a *trailAggregator) flush() string {
+	if a.buf.Len() == 0 {
+		return ""
+	}
+	line := a.line(a.evType, a.buf.String())
+	a.buf.Reset()
+	return line
+}
+
+// line renders one complete trail line.
+// line 渲染一条完整的轨迹行。
+func (a *trailAggregator) line(evType, text string) string {
+	if text == "" {
+		return "[" + evType + "]\n"
+	}
+	return "[" + evType + "] " + text + "\n"
+}
+
+// add folds one event's payload into the aggregator and returns the trail
+// fragment to carry on the emitted event.
+// add 把一个事件的载荷折叠进聚合器，返回随事件传递的轨迹片段。
+func (a *trailAggregator) add(evType, text string, forceBreak bool) string {
+	var out string
+	if evType != a.evType || forceBreak {
+		out = a.flush()
+		a.evType = evType
+	}
+	a.buf.WriteString(text)
+	if forceBreak || strings.ContainsRune(text, '\n') || a.buf.Len() >= trailLineMax {
+		out += a.line(evType, a.buf.String())
+		a.buf.Reset()
+	}
+	return out
+}
+
 // streamResponses sends a prompt to the /responses endpoint and returns a
 // channel of ResponseEvent values parsed from the SSE stream. The channel
 // closes when the stream ends (response.completed / incomplete / failed or
@@ -243,6 +301,13 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 	// trailing slash to avoid "//".
 	// /responses 端点挂在配置的基地址下；去除尾部斜杠避免 "//"。
 	url := strings.TrimRight(c.baseURL, "/") + "/responses"
+	// Hand the exact wire body to the request trace (thread log) before
+	// sending; runs on the caller's goroutine, before any events flow.
+	// 发送前把实际线上请求体交给 requestTrace（线程日志）；在调用方
+	// goroutine 上、任何事件流出之前执行。
+	if c.requestTrace != nil {
+		c.requestTrace(raw)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(raw)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -268,49 +333,21 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 		defer close(events)
 
 		// The SSE event trail aggregates wire events into self-contained
-		// lines (each prefixed with [type]) returned by trail() and carried
-		// on the emitted ResponseEvent via its Trail field. The consumer
-		// (processStream) writes them single-threaded, so trail lines and
-		// item log lines interleave in exact event order. Consecutive
-		// same-type deltas aggregate into one line until a newline, a type
-		// switch, an item-level event, or a length cap flushes it.
+		// lines (each prefixed with [type]) carried on the emitted
+		// ResponseEvent via its Trail field. The consumer (processStream)
+		// writes them single-threaded, so trail lines and item log lines
+		// interleave in exact event order. Consecutive same-type deltas
+		// aggregate into one line until a newline, a type switch, an
+		// item-level event, or trailLineMax flushes it. Each case derives
+		// its own payload and calls trailAggregator.add inline, so a
+		// single switch drives both emission and trail.
 		// SSE 事件轨迹把线上事件聚合成自包含的行（每行带 [type] 前缀），
-		// 由 trail() 返回并随发出的 ResponseEvent 的 Trail 字段传递。
-		// 消费方（processStream）单线程写入，因此轨迹行与条目日志行
-		// 按真实事件顺序交错。同 type 的连续增量聚合到同一行，直到
-		// 遇到换行、type 切换、条目级事件或长度上限时才冲刷成行。
-		const trailLineMax = 160
-		var (
-			trailType string
-			trailBuf  strings.Builder
-		)
-		trailLine := func(evType, text string) string {
-			if text == "" {
-				return "[" + evType + "]\n"
-			}
-			return "[" + evType + "] " + text + "\n"
-		}
-		flushTrail := func() string {
-			if trailBuf.Len() == 0 {
-				return ""
-			}
-			line := trailLine(trailType, trailBuf.String())
-			trailBuf.Reset()
-			return line
-		}
-		trail := func(evType, text string, forceBreak bool) string {
-			var out string
-			if evType != trailType || forceBreak {
-				out = flushTrail()
-				trailType = evType
-			}
-			trailBuf.WriteString(text)
-			if forceBreak || strings.ContainsRune(text, '\n') || trailBuf.Len() >= trailLineMax {
-				out += trailLine(evType, trailBuf.String())
-				trailBuf.Reset()
-			}
-			return out
-		}
+		// 随发出的 ResponseEvent 的 Trail 字段传递。消费方（processStream）
+		// 单线程写入，因此轨迹行与条目日志行按真实事件顺序交错。同 type
+		// 的连续增量聚合到同一行，直到遇到换行、type 切换、条目级事件或
+		// trailLineMax 上限时才冲刷成行。各 case 自行派生载荷并内联调用
+		// trailAggregator.add，单一 switch 同时驱动事件发出与轨迹记录。
+		var trailAgg trailAggregator
 
 		for scanner.Next() {
 			data := scanner.Data()
@@ -326,7 +363,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 			switch ev.Type {
 			case "response.output_text.delta":
 				if ev.Delta != "" {
-					if !c.emit(ctx, events, ResponseEvent{Type: EventOutputTextDelta, DeltaText: ev.Delta, ItemID: ev.ItemID, Trail: trail(ev.Type, ev.Delta, false)}) {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventOutputTextDelta, DeltaText: ev.Delta, ItemID: ev.ItemID, Trail: trailAgg.add(ev.Type, ev.Delta, false)}) {
 						return
 					}
 				}
@@ -339,7 +376,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				// OpenAI 使用 reasoning_summary_text.delta。两者都映射到
 				// 内部的 EventReasoningDelta 事件。
 				if ev.Delta != "" {
-					if !c.emit(ctx, events, ResponseEvent{Type: EventReasoningDelta, DeltaReasoning: ev.Delta, ItemID: ev.ItemID, Trail: trail(ev.Type, ev.Delta, false)}) {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventReasoningDelta, DeltaReasoning: ev.Delta, ItemID: ev.ItemID, Trail: trailAgg.add(ev.Type, ev.Delta, false)}) {
 						return
 					}
 				}
@@ -348,9 +385,8 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				if ev.Item == nil {
 					continue
 				}
-				itemTrail := trail(ev.Type, ev.Item.traceLabel(), true)
 				if item, ok := ev.Item.toResponseItem(); ok {
-					if !c.emit(ctx, events, ResponseEvent{Type: EventOutputItemDone, Item: &item, Trail: itemTrail}) {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventOutputItemDone, Item: &item, Trail: trailAgg.add(ev.Type, ev.Item.traceLabel(), true)}) {
 						return
 					}
 				}
@@ -359,7 +395,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				// Terminal event carries usage.
 				// 终止事件携带用量。
 				if ev.Response != nil && ev.Response.Usage != nil {
-					if !c.emit(ctx, events, ResponseEvent{Type: EventCompleted, Usage: ev.Response.Usage, Trail: trail(ev.Type, "", true)}) {
+					if !c.emit(ctx, events, ResponseEvent{Type: EventCompleted, Usage: ev.Response.Usage, Trail: trailAgg.add(ev.Type, "", true)}) {
 						return
 					}
 				}
@@ -385,7 +421,6 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				if ev.Response != nil && ev.Response.IncompleteDetails != nil && ev.Response.IncompleteDetails.Reason != "" {
 					reason = ev.Response.IncompleteDetails.Reason
 				}
-				incTrail := trail(ev.Type, "reason: "+reason, true)
 				if ev.Response != nil && ev.Response.Usage != nil {
 					if !c.emit(ctx, events, ResponseEvent{Type: EventCompleted, Usage: ev.Response.Usage}) {
 						return
@@ -394,7 +429,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				if !c.emit(ctx, events, ResponseEvent{
 					Type:  EventIncomplete,
 					Err:   fmt.Errorf("incomplete response, reason: %s", reason),
-					Trail: incTrail,
+					Trail: trailAgg.add(ev.Type, "reason: "+reason, true),
 				}) {
 					return
 				}
@@ -413,7 +448,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				if ev.Response != nil && ev.Response.Error != nil && ev.Response.Error.Message != "" {
 					msg = ev.Response.Error.Message
 				}
-				if !c.emit(ctx, events, ResponseEvent{Type: EventFailed, Err: classifyResponsesError(msg), Trail: trail(ev.Type, msg, true)}) {
+				if !c.emit(ctx, events, ResponseEvent{Type: EventFailed, Err: classifyResponsesError(msg), Trail: trailAgg.add(ev.Type, msg, true)}) {
 					return
 				}
 				// response.failed is also terminal; stop reading.
@@ -421,7 +456,7 @@ func (c *ModelClient) streamResponses(ctx context.Context, prompt Prompt, model 
 				return
 
 			case "error":
-				if !c.emit(ctx, events, ResponseEvent{Type: EventError, Err: fmt.Errorf("responses stream error"), Trail: trail(ev.Type, "", true)}) {
+				if !c.emit(ctx, events, ResponseEvent{Type: EventError, Err: fmt.Errorf("responses stream error, %s", ev.Response.Error.Message), Trail: trailAgg.add(ev.Type, "", true)}) {
 					return
 				}
 			}

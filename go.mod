@@ -3,7 +3,7 @@ module github.com/H-H1/actx
 go 1.26.1
 
 require (
-	github.com/H-H1/snowflakeid v0.0.0-20260909145402-f7179cc79c80
+	github.com/H-H1/snowflakeid v0.3.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0

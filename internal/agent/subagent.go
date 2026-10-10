@@ -100,6 +100,9 @@ func SpawnSubAgent(args SubAgentArgs) (*SubAgent, error) {
 	// 子代理即独立任务：在同一个 .actx/logs/ 目录下拥有以自己的
 	// 线程 ID 命名的专属日志文件，与父对话的文件相互独立。
 	session.turnLog = NewTurnLogger(session.threadID)
+	// Same wire-body tracing as the parent session.
+	// 与父会话相同的线上请求体记录。
+	client.SetRequestTrace(session.turnLog.LogRequestBody)
 
 	// Add the prompt as user input.
 	// 将提示作为用户输入添加。

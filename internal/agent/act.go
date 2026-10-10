@@ -178,6 +178,10 @@ func Spawn(args ACTXArgs) (*ACTX, error) {
 	// 每段对话（窗口/任务）一个文件。线程内的每次提交都追加到同一文件，
 	// 各自带 Turn 横幅；文件无法创建时为 nil（写入被静默跳过）。
 	session.turnLog = NewTurnLogger(session.threadID)
+	// Log the exact wire request body of every model call into the thread
+	// log (see TurnLogger.LogRequestBody).
+	// 把每次模型调用的确切线上请求体记入线程日志（见 TurnLogger.LogRequestBody）。
+	args.ModelClient.SetRequestTrace(session.turnLog.LogRequestBody)
 	// Link the session into the facade.
 	// 把 session 挂到门面上。
 	ACTX.session = session
