@@ -1,0 +1,18 @@
+# 版本控制与本地环境
+.git
+.gitignore
+.idea
+.vscode
+
+# 构建产物与测试
+*.exe
+actx-web
+dist/
+coverage.out
+
+# 本地运行数据（容器内应挂卷使用，不打进镜像）
+.actx/logs/
+
+# 文档与开发工具
+*.md
+.postman_collection.json
