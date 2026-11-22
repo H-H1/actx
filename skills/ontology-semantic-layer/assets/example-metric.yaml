@@ -1,0 +1,79 @@
+metrics:
+  - name: repurchase_rate_90d
+    display_name: 90天复购率
+    business_definition: "分子：90天内购买≥2次的会员数；分母：90天内购买≥1次的会员数；时间窗：90天"
+    formula: "COUNT(DISTINCT CASE WHEN order_count >= 2 THEN member_id END) / COUNT(DISTINCT member_id)"
+    numerator:
+      description: "90天内购买≥2次的会员数"
+      sql: "COUNT(DISTINCT CASE WHEN order_count >= 2 THEN member_id END)"
+    denominator:
+      description: "90天内购买≥1次的会员数"
+      sql: "COUNT(DISTINCT member_id)"
+    time_window:
+      value: 90
+      unit: day
+    filters:
+      - description: "剔除批量虚假注册"
+        sql: "batch_registered = false"
+      - description: "剔除已注销会员"
+        sql: "status != 'cancelled'"
+    data_source:
+      table: order_main
+      date_field: order_date
+      member_field: member_id
+    owner: "数据部-张XX"
+    update_frequency: daily
+    status: active
+    version: "1.0"
+
+  - name: active_member_rate_30d
+    display_name: 30天活跃会员率
+    business_definition: "分子：30天内有购买行为的会员数；分母：总会员数；时间窗：30天"
+    formula: "COUNT(DISTINCT CASE WHEN order_count_30d >= 1 THEN member_id END) / COUNT(DISTINCT member_id)"
+    numerator:
+      description: "30天内有购买行为的会员数"
+      sql: "COUNT(DISTINCT CASE WHEN order_count_30d >= 1 THEN member_id END)"
+    denominator:
+      description: "总会员数"
+      sql: "COUNT(DISTINCT member_id)"
+    time_window:
+      value: 30
+      unit: day
+    filters:
+      - description: "剔除批量虚假注册"
+        sql: "batch_registered = false"
+      - description: "剔除已注销会员"
+        sql: "status != 'cancelled'"
+    data_source:
+      table: order_main
+      date_field: order_date
+      member_field: member_id
+    owner: "数据部-张XX"
+    update_frequency: daily
+    status: active
+    version: "1.0"
+
+  - name: coupon_redemption_rate
+    display_name: 优惠券核销率
+    business_definition: "分子：已使用的优惠券数；分母：已发放的优惠券数；时间窗：按券有效期"
+    formula: "COUNT(DISTINCT CASE WHEN used = true THEN coupon_id END) / COUNT(DISTINCT coupon_id)"
+    numerator:
+      description: "已使用的优惠券数"
+      sql: "COUNT(DISTINCT CASE WHEN used = true THEN coupon_id END)"
+    denominator:
+      description: "已发放的优惠券数"
+      sql: "COUNT(DISTINCT coupon_id)"
+    time_window:
+      value: 30
+      unit: day
+    filters:
+      - description: "只统计已过有效期的券，避免未到期券拉低核销率"
+        sql: "expire_time < CURRENT_DATE"
+    data_source:
+      table: coupon_main
+      date_field: issue_date
+      member_field: member_id
+    owner: "运营部-李XX"
+    update_frequency: weekly
+    status: active
+    version: "1.0"

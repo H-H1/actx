@@ -1,0 +1,20 @@
+objects:
+  - name: ""
+    display_name: ""
+    primary_key: ""
+    properties:
+      - name: ""
+        type: string
+
+links:
+  - name: ""
+    display_name: ""
+    from: ""
+    to: ""
+    cardinality: many_to_one
+
+actions:
+  - name: ""
+    display_name: ""
+    subject: ""
+    object: ""

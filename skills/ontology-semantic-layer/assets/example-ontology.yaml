@@ -1,0 +1,128 @@
+objects:
+  - name: Member
+    display_name: 会员
+    primary_key: master_id
+    properties:
+      - name: master_id
+        type: string
+      - name: new_crm_id
+        type: string
+      - name: old_system_id
+        type: string
+      - name: phone
+        type: string
+        masked: true
+      - name: name
+        type: string
+      - name: register_time
+        type: datetime
+      - name: status
+        type: enum
+        values: [active, inactive, cancelled]
+      - name: merge_confidence
+        type: decimal
+      - name: merge_status
+        type: enum
+        values: [merged, pending, rejected]
+
+  - name: Order
+    display_name: 订单
+    primary_key: order_id
+    properties:
+      - name: order_id
+        type: string
+      - name: amount
+        type: decimal
+      - name: order_time
+        type: datetime
+      - name: status
+        type: enum
+        values: [paid, refunded, cancelled]
+
+  - name: Store
+    display_name: 门店
+    primary_key: store_id
+    properties:
+      - name: store_id
+        type: string
+      - name: name
+        type: string
+      - name: city
+        type: string
+      - name: address
+        type: string
+
+  - name: Coupon
+    display_name: 优惠券
+    primary_key: coupon_id
+    properties:
+      - name: coupon_id
+        type: string
+      - name: type
+        type: enum
+        values: [discount, cash, gift]
+      - name: value
+        type: decimal
+      - name: expire_time
+        type: datetime
+
+links:
+  - name: placed_by
+    display_name: 下单
+    from: Order
+    to: Member
+    cardinality: many_to_one
+
+  - name: at_store
+    display_name: 发生在
+    from: Order
+    to: Store
+    cardinality: many_to_one
+
+  - name: issued_to
+    display_name: 发给
+    from: Coupon
+    to: Member
+    cardinality: many_to_one
+
+  - name: used_in
+    display_name: 使用于
+    from: Coupon
+    to: Order
+    cardinality: one_to_one
+
+actions:
+  - name: purchase
+    display_name: 购买
+    subject: Member
+    object: Order
+    input:
+      - name: order_id
+        type: string
+    output:
+      - name: order_id
+        type: string
+
+  - name: redeem
+    display_name: 领取
+    subject: Member
+    object: Coupon
+    input:
+      - name: coupon_id
+        type: string
+    output:
+      - name: coupon_id
+        type: string
+
+  - name: use_coupon
+    display_name: 使用优惠券
+    subject: Member
+    object: Coupon
+    input:
+      - name: coupon_id
+        type: string
+      - name: order_id
+        type: string
+    output:
+      - name: success
+        type: boolean

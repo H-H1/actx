@@ -1,0 +1,25 @@
+metrics:
+  - name: ""
+    display_name: ""
+    business_definition: "分子：...；分母：...；时间窗：..."
+    formula: ""
+    numerator:
+      description: ""
+      sql: ""
+    denominator:
+      description: ""
+      sql: ""
+    time_window:
+      value: 90
+      unit: day
+    filters:
+      - description: ""
+        sql: ""
+    data_source:
+      table: ""
+      date_field: ""
+      member_field: ""
+    owner: ""
+    update_frequency: daily
+    status: draft
+    version: "1.0"
