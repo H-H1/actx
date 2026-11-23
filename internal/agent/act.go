@@ -74,6 +74,9 @@ func RegisterBuiltinTools(registry *tools.ToolRegistry, apiKey, baseURL string) 
 	// apply_patch: apply structured file edits.
 	// apply_patch：应用结构化的文件补丁修改。
 	registry.Register(NewApplyPatchTool())
+	// get_time: current date and time.
+	// get_time：当前日期和时间。
+	registry.Register(NewGetTimeTool())
 	// web_search: search the web for real-time information.
 	// web_search：联网搜索实时信息。
 	registry.Register(NewWebSearchTool(apiKey, baseURL))
