@@ -101,9 +101,13 @@ func Spawn(args ACTXArgs) (*ACTX, error) {
 		// apply_patch: apply structured file edits.
 		// apply_patch：应用结构化的文件补丁修改。
 		args.Registry.Register(NewApplyPatchTool())
-		// web_search: search the web when the feature is enabled.
-		// web_search：特性启用时进行联网搜索。
-		args.Registry.Register(NewWebSearchTool())
+		// web_search / web_fetch: live web search and page fetching via the
+		// DeepSeek Search/Fetch APIs, using the same API key and base URL
+		// as the model client.
+		// web_search / web_fetch：通过 DeepSeek Search/Fetch API 进行联网
+		// 搜索与网页抓取，复用模型客户端的 API 密钥与基础 URL。
+		args.Registry.Register(NewWebSearchTool(args.APIKey, args.BaseURL))
+		args.Registry.Register(NewWebFetchTool(args.APIKey, args.BaseURL))
 	}
 	// Default to the standard structured logger.
 	// 默认使用标准结构化日志器。

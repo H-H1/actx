@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/H-H1/actx/internal/config"
@@ -75,13 +77,16 @@ func (f *flexibleStringSlice) UnmarshalJSON(data []byte) error {
 		*f = arr
 		return nil
 	}
-	// Fall back to single string, split by whitespace.
-	// 回退到单个字符串，按空白分割。
+	// Fall back to a single string: keep it verbatim as one element so that
+	// quoting and $variables survive untouched. Splitting by whitespace would
+	// destroy embedded quotes and mangle PowerShell syntax like foreach($i ...).
+	// 回退到单个字符串：整体保留为一个元素，确保引号和 $ 变量不被破坏。
+	// 按空白分割会破坏内嵌引号并损坏 foreach($i ...) 等 PowerShell 语法。
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err
 	}
-	*f = strings.Fields(s)
+	*f = []string{s}
 	return nil
 }
 
@@ -100,6 +105,12 @@ func (t *ShellTool) Handle(ctx context.Context, inv tools.ToolInvocation) (tools
 	if len(args.Command) == 0 {
 		return nil, tools.NewRespondToModelError("command is required")
 	}
+
+	// Drop a redundant nested powershell wrapper before anything else so the
+	// sandbox check sees the real command and $variables are not double-parsed.
+	// 先剥离多余的嵌套 powershell 包装，让沙箱检查看到真实命令，
+	// 同时避免 $ 变量被外层 shell 双重解析。
+	args.Command = stripNestedPowerShell(args.Command)
 
 	// Enforce sandbox policy.
 	// 强制执行沙箱策略。
@@ -222,7 +233,7 @@ func platformInstructions() string {
 You are running on Windows. The shell tool executes commands via PowerShell.
 - Use PowerShell cmdlets and syntax: Get-ChildItem (ls/dir), Get-Content (cat/type), Remove-Item (rm/del), Copy-Item (cp/copy), Move-Item (mv/move), New-Item (mkdir/touch).
 - Prefer -LiteralPath on file cmdlets when paths may contain special characters.
-- Do not mix shells: never pipe PowerShell output into cmd.exe-only tools (cmd /c) for destructive operations.
+- The shell tool already runs inside PowerShell. Never wrap commands in powershell -Command, pwsh, or cmd /c — the nested invocation mangles quoting and $variables. Call cmdlets directly.
 - $() subexpressions, pipes and backtick line continuation work; use double quotes for string interpolation, single quotes for literal strings.
 - Start background/GUI processes with Start-Process -WindowStyle Hidden.
 - Path separator is backslash (\).`
@@ -278,23 +289,101 @@ var windowsShell = sync.OnceValue(func() string {
 	return ""
 })
 
+// stripNestedPowerShell removes a redundant "powershell ... -Command <cmd>"
+// wrapper emitted by the model. The shell tool already executes via
+// PowerShell, so keeping the wrapper would make the outer PowerShell parse the
+// inner command line as a double-quoted string and expand its $variables
+// against the outer (empty) scope before the nested powershell.exe even
+// starts — e.g. `Where-Object { $_.FullName }` degrades to `{ .FullName }`
+// and `foreach($i ...)` to `foreach( in )`.
+// stripNestedPowerShell 移除模型多余的 "powershell ... -Command <cmd>" 包装。
+// shell 工具本身已在 PowerShell 中执行，保留包装会让外层 PowerShell 把内层
+// 命令行当双引号字符串解析，并在内层 powershell.exe 启动前就按外层（空）
+// 作用域展开其 $ 变量——例如 `Where-Object { $_.FullName }` 会退化为
+// `{ .FullName }`，`foreach($i ...)` 会退化为 `foreach( in )`。
+func stripNestedPowerShell(command []string) []string {
+	if len(command) < 2 {
+		return command
+	}
+	prog := strings.ToLower(command[0])
+	if idx := strings.LastIndexAny(prog, `/\`); idx >= 0 {
+		prog = prog[idx+1:]
+	}
+	prog = strings.TrimSuffix(prog, ".exe")
+	if prog != "powershell" && prog != "pwsh" {
+		return command
+	}
+	for i := 1; i < len(command); i++ {
+		flag := strings.ToLower(command[i])
+		if flag == "-command" || flag == "-c" {
+			if i+1 < len(command) {
+				return command[i+1:]
+			}
+			return command
+		}
+		if !strings.HasPrefix(flag, "-") {
+			// Unexpected positional argument; leave the command untouched.
+			// 出现非预期的位置参数；保持原样不动。
+			return command
+		}
+	}
+	return command
+}
+
+// encodePowerShellCommand encodes a script for -EncodedCommand: Base64 of
+// UTF-16LE, which is what PowerShell expects. Encoding bypasses the native
+// command line parser entirely, so quotes, $variables and non-ASCII text
+// arrive at PowerShell verbatim with a single parse.
+// encodePowerShellCommand 将脚本编码为 -EncodedCommand 形式：PowerShell 要求
+// 的 UTF-16LE Base64。编码方式完全绕过原生命令行解析器，引号、$ 变量和
+// 非 ASCII 文本原样到达 PowerShell，只经一次解析。
+func encodePowerShellCommand(script string) string {
+	units := utf16.Encode([]rune(script))
+	b := make([]byte, len(units)*2)
+	for i, u := range units {
+		b[i*2] = byte(u)
+		b[i*2+1] = byte(u >> 8)
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
 // prepareCommand converts the command array into a shell invocation.
 // prepareCommand 将命令数组转换为 shell 调用。
-// On Windows it uses PowerShell -Command (resolved by windowsShell, cmd.exe
-// /c only as last resort); on Unix it uses sh -c.
-// Windows 上使用 PowerShell -Command（由 windowsShell 解析，仅作最后兜底时
-// 用 cmd.exe /c）；Unix 上使用 sh -c。
+// On Windows it uses PowerShell -EncodedCommand (resolved by windowsShell,
+// cmd.exe /c only as last resort); on Unix it uses sh -c.
+// Windows 上使用 PowerShell -EncodedCommand（由 windowsShell 解析，仅作最后
+// 兜底时用 cmd.exe /c）；Unix 上使用 sh -c。
 func prepareCommand(command []string) (string, []string) {
-	// Join the command array into a single string for shell execution.
-	// 将命令数组连接为单个字符串以供 shell 执行。
-	cmdStr := joinCommand(command)
 	if runtime.GOOS == "windows" {
 		if ps := windowsShell(); ps != "" {
-			return ps, []string{"-NoProfile", "-NonInteractive", "-Command", powershellUTF8Prefix + cmdStr}
+			script := powershellUTF8Prefix + joinPowerShellCommand(command)
+			return ps, []string{"-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShellCommand(script)}
 		}
-		return "cmd.exe", []string{"/c", cmdStr}
+		return "cmd.exe", []string{"/c", joinCommand(command)}
 	}
-	return "sh", []string{"-c", cmdStr}
+	return "sh", []string{"-c", joinCommand(command)}
+}
+
+// joinPowerShellCommand joins a command array into a single script string.
+// Parts containing spaces or quotes are wrapped in single quotes — PowerShell
+// literal strings — with embedded single quotes doubled. Unlike Go's %q this
+// survives PowerShell's own parsing (no \" escapes) and keeps $variables literal.
+// joinPowerShellCommand 将命令数组拼接为单个脚本字符串。包含空格或引号的
+// 部分用单引号包裹（PowerShell 字面量字符串），内嵌单引号翻倍。与 Go 的 %q
+// 不同，这种形式能经受 PowerShell 自身的解析（无 \" 转义）且保持 $ 变量字面量。
+func joinPowerShellCommand(command []string) string {
+	if len(command) == 1 {
+		return command[0]
+	}
+	parts := make([]string, len(command))
+	for i, part := range command {
+		if containsSpace(part) || strings.ContainsAny(part, `"'`) {
+			parts[i] = "'" + strings.ReplaceAll(part, "'", "''") + "'"
+		} else {
+			parts[i] = part
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // joinCommand joins a command array into a single shell command string.
@@ -409,9 +498,14 @@ func isWriteCommand(command []string) bool {
 		return true
 	}
 
-	// Extract the program name: lowercase, strip path prefix and .exe suffix.
-	// 提取程序名称：转为小写，去除路径前缀和 .exe 后缀。
+	// Extract the program name from the first token (command may be a single
+	// verbatim string): lowercase, strip path prefix and .exe suffix.
+	// 从第一个 token 提取程序名称（command 可能是单个原样字符串）：
+	// 转为小写，去除路径前缀和 .exe 后缀。
 	prog := strings.ToLower(command[0])
+	if idx := strings.IndexAny(prog, " \t"); idx >= 0 {
+		prog = prog[:idx]
+	}
 	if idx := strings.LastIndex(prog, "/"); idx >= 0 {
 		prog = prog[idx+1:]
 	}
