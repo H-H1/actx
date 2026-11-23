@@ -13,11 +13,6 @@ import (
 	"github.com/H-H1/actx/internal/protocol"
 )
 
-// turnLogMaxRunes limits a single logged message to keep the file readable;
-// longer content is truncated with a marker.
-// turnLogMaxRunes 限制单条日志消息的最大长度，超长内容截断并附加标记。
-const turnLogMaxRunes = 4000
-
 // TurnLogger writes model input/output to a per-thread plain-text log file,
 // TurnLogger 把模型的输入输出写入按线程划分的本地纯文本日志文件，
 // one entry per item with a timestamp and role tag, preserving real line
@@ -142,8 +137,11 @@ func logTimestamp() string {
 }
 
 // writeSection appends a "[ts] [role]" header line followed by the
-// multi-line content with real line breaks preserved.
+// multi-line content with real line breaks preserved. Content is logged
+// in full: the log is the only place the complete conversation is
+// recoverable, so no truncation is applied.
 // writeSection 追加 "[时间戳] [角色]" 头行，随后是保留真实换行的多行内容。
+// 内容完整记录：日志是完整还原对话的唯一场所，因此不做任何截断。
 func (l *TurnLogger) writeSection(role, content string) {
 	if l == nil {
 		return
@@ -152,9 +150,6 @@ func (l *TurnLogger) writeSection(role, content string) {
 	defer l.mu.Unlock()
 	if l.file == nil {
 		return
-	}
-	if r := []rune(content); len(r) > turnLogMaxRunes {
-		content = string(r[:turnLogMaxRunes]) + fmt.Sprintf("\n…(truncated +%d chars)", len(r)-turnLogMaxRunes)
 	}
 	fmt.Fprintf(l.file, "[%s] [%s]\n%s\n\n", logTimestamp(), role, content)
 }
