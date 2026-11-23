@@ -58,6 +58,30 @@ type ACTXArgs struct {
 	Logger      *slog.Logger
 }
 
+// RegisterBuiltinTools registers all built-in tools into the given registry:
+// shell, apply_patch, and web_search/web_fetch (live web search and page
+// fetching via the DeepSeek Search/Fetch APIs, using the same API key and
+// base URL as the model client). Entry points that build their own registry
+// must call this so the tool set stays consistent across TUI/exec/appserver.
+// RegisterBuiltinTools 向给定注册表注册全部内置工具：shell、apply_patch，
+// 以及 web_search/web_fetch（通过 DeepSeek Search/Fetch API 进行联网搜索
+// 与网页抓取，复用模型客户端的 API 密钥与基础 URL）。自行构建注册表的
+// 入口必须调用此函数，以保证 TUI/exec/appserver 的工具集一致。
+func RegisterBuiltinTools(registry *tools.ToolRegistry, apiKey, baseURL string) {
+	// shell: execute commands under sandbox/approval constraints.
+	// shell：在沙箱/审批约束下执行命令。
+	registry.Register(NewShellTool())
+	// apply_patch: apply structured file edits.
+	// apply_patch：应用结构化的文件补丁修改。
+	registry.Register(NewApplyPatchTool())
+	// web_search: search the web for real-time information.
+	// web_search：联网搜索实时信息。
+	registry.Register(NewWebSearchTool(apiKey, baseURL))
+	// web_fetch: fetch a single page as Markdown.
+	// web_fetch：抓取单个网页并返回 Markdown。
+	registry.Register(NewWebFetchTool(apiKey, baseURL))
+}
+
 // Spawn creates a new ACTX instance and starts the background submission loop.
 // Spawn 创建一个新的 ACTX 实例并启动后台提交循环。
 // The caller is responsible for providing a configured ModelClient and a
@@ -95,19 +119,7 @@ func Spawn(args ACTXArgs) (*ACTX, error) {
 	// Register built-in tools if registry is empty.
 	// 如果注册表为空，注册内置工具。
 	if len(args.Registry.List()) == 0 {
-		// shell: execute commands under sandbox/approval constraints.
-		// shell：在沙箱/审批约束下执行命令。
-		args.Registry.Register(NewShellTool())
-		// apply_patch: apply structured file edits.
-		// apply_patch：应用结构化的文件补丁修改。
-		args.Registry.Register(NewApplyPatchTool())
-		// web_search / web_fetch: live web search and page fetching via the
-		// DeepSeek Search/Fetch APIs, using the same API key and base URL
-		// as the model client.
-		// web_search / web_fetch：通过 DeepSeek Search/Fetch API 进行联网
-		// 搜索与网页抓取，复用模型客户端的 API 密钥与基础 URL。
-		args.Registry.Register(NewWebSearchTool(args.APIKey, args.BaseURL))
-		args.Registry.Register(NewWebFetchTool(args.APIKey, args.BaseURL))
+		RegisterBuiltinTools(args.Registry, args.APIKey, args.BaseURL)
 	}
 	// Default to the standard structured logger.
 	// 默认使用标准结构化日志器。

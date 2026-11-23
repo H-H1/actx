@@ -425,11 +425,10 @@ func (s *Server) handleThreadStart(ctx context.Context, id json.RawMessage, para
 		threadCfg = &copyCfg
 	}
 
-	// Build the tool registry.
-	// 构建工具注册表。
+	// Build the tool registry with all built-in tools.
+	// 构建含全部内置工具的工具注册表。
 	registry := tools.NewToolRegistry()
-	registry.Register(agent.NewShellTool())
-	registry.Register(agent.NewApplyPatchTool())
+	agent.RegisterBuiltinTools(registry, s.apiKey, s.baseURL)
 
 	// Spawn the ACTX agent.
 	// 启动 ACTX 代理。

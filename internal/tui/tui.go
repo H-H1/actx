@@ -804,20 +804,14 @@ func (m *Model) renderStatus() string {
 // Run starts the TUI program. It blocks until the user quits.
 // Run 启动 TUI 程序。它会阻塞直到用户退出。
 func Run(ctx context.Context, cfg *config.Config, apiKey, baseURL string) error {
-	// Build the tool registry. It maps tool names to executors and
-	// guarantees a deterministic order when specs are exposed to the model.
-	// 构建工具注册表。它把工具名映射到执行器，并保证向模型暴露
-	// 工具描述时的顺序是确定的。
+	// Build the tool registry with all built-in tools (shell, apply_patch,
+	// web_search, web_fetch). It maps tool names to executors and guarantees
+	// a deterministic order when specs are exposed to the model.
+	// 构建含全部内置工具（shell、apply_patch、web_search、web_fetch）的
+	// 工具注册表。它把工具名映射到执行器，并保证向模型暴露工具描述时的
+	// 顺序是确定的。
 	registry := tools.NewToolRegistry()
-
-	// Register the shell tool: executes commands under sandbox and
-	// approval-policy constraints.
-	// 注册 shell 工具：在沙箱与审批策略约束下执行命令。
-	registry.Register(agent.NewShellTool())
-
-	// Register the apply_patch tool: applies structured file edits.
-	// 注册 apply_patch 工具：应用结构化的文件补丁修改。
-	registry.Register(agent.NewApplyPatchTool())
+	agent.RegisterBuiltinTools(registry, apiKey, baseURL)
 
 	// Spawn the ACTX agent. This starts the background submission-loop
 	// goroutine and wires up the txSub/rxEvent channels.

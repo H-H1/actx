@@ -65,13 +65,12 @@ func Run(ctx context.Context, opts ExecOptions) error {
 		stderr = os.Stderr
 	}
 
-	// Build the tool registry with default tools.
-	// 使用默认工具构建工具注册表。
+	// Build the tool registry with all built-in tools.
+	// 使用全部内置工具构建工具注册表。
 	registry := opts.Registry
 	if registry == nil {
 		registry = tools.NewToolRegistry()
-		registry.Register(agent.NewShellTool())
-		registry.Register(agent.NewApplyPatchTool())
+		agent.RegisterBuiltinTools(registry, opts.APIKey, opts.BaseURL)
 	}
 
 	// Spawn the ACTX agent.
